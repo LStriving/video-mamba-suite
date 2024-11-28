@@ -11,37 +11,45 @@ We use InternVideo2-1B and InternVideo2-6B from our InternVideo2 as backbones fo
 
 **THUMOS-14 + InternVideo2-6B**
 
-|Method | Block | mAP@0.3 | mAP@0.4 | mAP@0.5 | mAP@0.6 | mAP@0.7 | mAP@Avg |
-|:----:|:-----:|:----------------:|:-------:|:-------:|:-------:|:-------:|:-------:|
-ActionFormer | Win Attn | 82.26 | 81.85 | 75.05 | 65.82 | 50.27 | 71.86 |
-ActionMamba | ViM | 86.22 | 82.87 | 76.42 | **66.43** | 50.25 | 72.44 |
-ActionMamba | DBM | **86.89** | **83.09** | **76.90** | 65.91 | **50.82** | **72.72** |
+|    Method    |  Block   |  mAP@0.3  |  mAP@0.4  |  mAP@0.5  |  mAP@0.6  |  mAP@0.7  |  mAP@Avg  |
+| :----------: | :------: | :-------: | :-------: | :-------: | :-------: | :-------: | :-------: |
+| ActionFormer | Win Attn |   82.26   |   81.85   |   75.05   |   65.82   |   50.27   |   71.86   |
+| ActionMamba  |   ViM    |   86.22   |   82.87   |   76.42   | **66.43** |   50.25   |   72.44   |
+| ActionMamba  |   DBM    | **86.89** | **83.09** | **76.90** |   65.91   | **50.82** | **72.72** |
 
+Thumos 14 + I3D
+![alt text](image.png)
+
+|          Method           |  Block   | mAP@0.3 | mAP@0.4 | mAP@0.5 | mAP@0.6 | mAP@0.7 | mAP@Avg |
+| :-----------------------: | :------: | :-----: | :-----: | :-----: | :-----: | :-----: | :-----: |
+|       ActionFormer        | Win Attn |  82.13  |  77.80  |  70.95  |  59.40  |  43.87  |  66.83  |
+| ActionFormer (reproduced) | Win Attn |  82.13  |  78.26  |  70.85  |  58.97  |  43.61  |  66.76  |
+|        ActionMamba        |   DBM    |  83.12  |  79.04  |  71.55  |  60.62  |  44.78  |  67.82  |
 
 
 **ActivityNet + InternVideo2-6B**
 
-|Method | Block | mAP@0.5 | mAP@0.75 | mAP@0.95 | mAP@Avg |
-|:----:|:-----:|:----------------:|:-------:|:-------:|:-------:
-ActionFormer | Win Attn | 61.47 | 44.61 | 12.73 | 41.19 |
-ActionMamba | ViM | 62.31 | 43.17 | 9.65 | 41.77 |
-ActionMamba | DBM | **62.43** | **43.49** | **10.23** | **42.02** |
+|    Method    |  Block   |  mAP@0.5  | mAP@0.75  | mAP@0.95  |  mAP@Avg  |
+| :----------: | :------: | :-------: | :-------: | :-------: | :-------: |
+| ActionFormer | Win Attn |   61.47   |   44.61   |   12.73   |   41.19   |
+| ActionMamba  |   ViM    |   62.31   |   43.17   |   9.65    |   41.77   |
+| ActionMamba  |   DBM    | **62.43** | **43.49** | **10.23** | **42.02** |
 
 **HACS Segment + InternVideo2-6B**
 
-|Method | Block | mAP@0.5 | mAP@0.75 | mAP@0.95 | mAP@Avg |
-|:----:|:-----:|:----------------:|:-------:|:-------:|:-------:
-ActionFormer | Win Attn | 62.62 | 44.61 | 12.73 | 43.34 |
-ActionMamba | ViM | 63.78 | 45.45 | 13.01 | 44.26 |
-ActionMamba | DBM | **64.02** | **45.71** | **13.34** | **44.56** |
+|    Method    |  Block   |  mAP@0.5  | mAP@0.75  | mAP@0.95  |  mAP@Avg  |
+| :----------: | :------: | :-------: | :-------: | :-------: | :-------: |
+| ActionFormer | Win Attn |   62.62   |   44.61   |   12.73   |   43.34   |
+| ActionMamba  |   ViM    |   63.78   |   45.45   |   13.01   |   44.26   |
+| ActionMamba  |   DBM    | **64.02** | **45.71** | **13.34** | **44.56** |
 
 **FineAction + InternVideo2-1B**
 
-|Method | Block | mAP@0.5 | mAP@0.75 | mAP@0.95 | mAP@Avg |
-|:----:|:-----:|:----------------:|:-------:|:-------:|:-------:
-ActionFormer | Win Attn | 43.11 | 27.09 | 5.32 | 27.22 |
-ActionMamba | ViM | 44.15 | 28.30 | 6.14 | 28.36 |
-ActionMamba | DBM | **45.44** | **28.82** | **6.79** | **29.04** | 
+|    Method    |  Block   |  mAP@0.5  | mAP@0.75  | mAP@0.95 |  mAP@Avg  |
+| :----------: | :------: | :-------: | :-------: | :------: | :-------: |
+| ActionFormer | Win Attn |   43.11   |   27.09   |   5.32   |   27.22   |
+| ActionMamba  |   ViM    |   44.15   |   28.30   |   6.14   |   28.36   |
+| ActionMamba  |   DBM    | **45.44** | **28.82** | **6.79** | **29.04** |
 
 
 

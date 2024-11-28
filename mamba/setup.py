@@ -38,11 +38,14 @@ BASE_WHEEL_URL = "https://github.com/state-spaces/mamba/releases/download/{tag_n
 
 # FORCE_BUILD: Force a fresh build locally, instead of attempting to find prebuilt wheels
 # SKIP_CUDA_BUILD: Intended to allow CI to use a simple `python setup.py sdist` run to copy over raw files, without any cuda compilation
-FORCE_BUILD = os.getenv("MAMBA_FORCE_BUILD", "FALSE") == "TRUE"
-SKIP_CUDA_BUILD = os.getenv("MAMBA_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
-# For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
-FORCE_CXX11_ABI = os.getenv("MAMBA_FORCE_CXX11_ABI", "FALSE") == "TRUE"
+# FORCE_BUILD = os.getenv("MAMBA_FORCE_BUILD", "FALSE") == "TRUE"
+# SKIP_CUDA_BUILD = os.getenv("MAMBA_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
+# # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
+# FORCE_CXX11_ABI = os.getenv("MAMBA_FORCE_CXX11_ABI", "FALSE") == "TRUE"
 
+FORCE_BUILD = True
+SKIP_CUDA_BUILD = False
+FORCE_CXX11_ABI = False
 
 def get_platform():
     """
@@ -258,7 +261,8 @@ setup(
         "Operating System :: Unix",
     ],
     ext_modules=ext_modules,
-    cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension}
+    # cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension}
+    cmdclass={"bdist_wheel": CachedWheelsCommand, 'build_ext': BuildExtension.with_options(use_ninja=False)}
     if ext_modules
     else {
         "bdist_wheel": CachedWheelsCommand,
