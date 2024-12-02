@@ -14,8 +14,8 @@ import pickle
 
 import io
 
-@register_dataset("thumos_new")
-class THUMOS14Dataset(Dataset):
+@register_dataset("swallow")
+class SwallowDataset(Dataset):
     def __init__(
         self,
         is_training,     # if in training mode
@@ -87,7 +87,7 @@ class THUMOS14Dataset(Dataset):
         # load database and select the subset
         with open(json_file, 'r') as fid:
             json_data = json.load(fid)
-        json_db = json_data['database']
+        json_db = json_data
 
         # if label_dict is not available
         if self.label_dict is None:
@@ -165,6 +165,11 @@ class THUMOS14Dataset(Dataset):
             data = io.BytesIO(mmengine.get(filename))
             feats = torch.load(data)
             feats = feats.numpy().astype(np.float32)
+        elif "npz" in self.file_ext:
+            data = io.BytesIO(mmengine.get(filename))
+            feat_spa = np.load(data)['feat_spa'].astype(np.float32) # C x T
+            feat_tem = np.load(data)['feat_tem'].astype(np.float32) # C x T
+            feats = np.concatenate([feat_spa,feat_tem],axis=0)
         else:
             raise NotImplementedError
 
