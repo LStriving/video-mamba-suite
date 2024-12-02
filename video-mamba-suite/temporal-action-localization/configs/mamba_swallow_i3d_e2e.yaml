@@ -1,17 +1,17 @@
 dataset_name: swallow
 train_split: ['train'] # should be in lower case!
-val_split: ['validation'] # should be in lower case!
+val_split: ['test'] # should be in lower case!
 dataset: {
-  json_file: ./data/swallow/anno/swallow_AllTime_traintest.json,
+  json_file: ./data/swallow/anno/swallow_singlestage_without_all.json,
   feat_folder: ./data/swallow/stage_1,
   file_prefix: ~,
   file_ext: .npy,
-  num_classes: 1,
+  num_classes: 7,
   input_dim: 2048,
   feature_type: "",
   # feature_type: "_spatial_feature",
   #2048+768, 1024+768,1280+1024
-  feat_stride: 3,   #TODO: mapping
+  feat_stride: 3,
   num_frames: 8,
   # serve as data augmentation
   trunc_thresh: 0.5,

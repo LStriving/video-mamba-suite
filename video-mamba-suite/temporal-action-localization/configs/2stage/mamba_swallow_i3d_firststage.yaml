@@ -1,8 +1,8 @@
 dataset_name: swallow
 train_split: ['train'] # should be in lower case!
-val_split: ['validation'] # should be in lower case!
+val_split: ['test'] # should be in lower case!
 dataset: {
-  json_file: ./data/swallow/anno/swallow_AllTime_traintest.json,
+  json_file: ./data/swallow/anno/swallow_singlestage_without_all.json,
   feat_folder: ./data/swallow/stage_1,
   file_prefix: ~,
   file_ext: .npy,
@@ -17,6 +17,9 @@ dataset: {
   trunc_thresh: 0.5,
   crop_ratio: [0.9, 1.0],
   max_seq_len: 864,
+  two_stage: True,
+  stage_at: 1,
+  desired_action_ids: [0]
 }
 model: {
   backbone_type: mamba,
@@ -59,4 +62,4 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpt_swallow/
+output_folder: ./ckpt_swallow_stage1/
