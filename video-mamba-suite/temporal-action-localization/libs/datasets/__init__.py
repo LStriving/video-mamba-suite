@@ -1,6 +1,6 @@
 from .data_utils import worker_init_reset_seed, truncate_feats
 from .datasets import make_dataset, make_data_loader
-from . import  anet, hacs, thumos14_new # other datasets go here
+from . import  anet, hacs, thumos14_new, swallow # other datasets go here
 
 __all__ = ['worker_init_reset_seed', 'truncate_feats',
            'make_dataset', 'make_data_loader']

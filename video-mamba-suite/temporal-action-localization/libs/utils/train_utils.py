@@ -370,7 +370,8 @@ def valid_one_epoch(
     evaluator = None,
     output_file = None,
     tb_writer = None,
-    print_freq = 20
+    print_freq = 20,
+    **kwargs
 ):
     """Test the model on the validation set"""
     # either evaluate the results or save the results

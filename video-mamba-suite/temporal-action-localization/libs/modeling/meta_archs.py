@@ -216,7 +216,7 @@ class PtTransformer(nn.Module):
         for l, (s, w) in enumerate(zip(self.fpn_strides, self.mha_win_size)):
             stride = s * (w // 2) * 2 if w > 1 else s
             # print(stride)
-            assert max_seq_len % stride == 0, "max_seq_len must be divisible by fpn stride and window size"
+            assert max_seq_len % stride == 0, f"max_seq_len ({max_seq_len}) must be divisible by fpn stride ({stride}) and window size"
             if max_div_factor < stride:
                 max_div_factor = stride
         self.max_div_factor = max_div_factor

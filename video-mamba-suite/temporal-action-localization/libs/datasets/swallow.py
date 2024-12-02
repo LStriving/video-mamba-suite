@@ -34,7 +34,10 @@ class SwallowDataset(Dataset):
         file_prefix,     # feature file prefix if any
         file_ext,        # feature file extension if any
         force_upsampling, # force to upsample to max_seq_len
-        feature_type=""
+        feature_type="",
+        two_stage=False, # two stage training
+        stage_at=0,      # stage to start training
+        desired_action_ids=None, # desired action ids
     ):
         # file path
         # # assert os.path.exists(feat_folder) and os.path.exists(json_file)
@@ -51,6 +54,10 @@ class SwallowDataset(Dataset):
         self.json_file = json_file
 
         # split / training mode
+        if isinstance(split, str):
+            split = [split]
+        if isinstance(split, list) or isinstance(split, tuple):
+            split = [s.lower() for s in split]
         self.split = split
         self.is_training = is_training
 
@@ -65,20 +72,27 @@ class SwallowDataset(Dataset):
         self.num_classes = num_classes
         self.label_dict = None
         self.crop_ratio = crop_ratio
+        
+        # two stage training
+        self.two_stage = two_stage
+        assert stage_at in [1, 2] if self.two_stage else None
+        self.stage_at = stage_at
 
         # load database and select the subset
         dict_db, label_dict = self._load_json_db(self.json_file)
-        assert len(label_dict) == num_classes
+        assert len(label_dict) == num_classes or \
+                len(label_dict) == len(desired_action_ids), f'{len(label_dict)} vs {num_classes}, label dict: {label_dict}'
         self.data_list = dict_db
         self.label_dict = label_dict
 
         # dataset specific attributes
         self.db_attributes = {
-            'dataset_name': 'thumos-14',
-            'tiou_thresholds': np.linspace(0.3, 0.7, 5),
+            'dataset_name': 'swallow',
+            'tiou_thresholds': np.linspace(0.1, 0.7, 7),
             # we will mask out cliff diving
             'empty_label_ids': [],
         }
+        print(f"SwallowDataset: {len(self.data_list)} videos loaded.")
 
     def get_attributes(self):
         return self.db_attributes
@@ -94,8 +108,27 @@ class SwallowDataset(Dataset):
             label_dict = {}
             for key, value in json_db.items():
                 for act in value['annotations']:
-                    label_dict[act['label']] = act['label_id']
+                    if self.desired_action_ids is not None and act['label_id'] in self.desired_action_ids:
+                        label_dict[act['label']] = act['label_id']
+                    elif self.desired_action_ids is None:
+                        label_dict[act['label']] = act['label_id']
+                    elif act['label_id'] not in self.desired_action_ids:
+                        continue
+        # remap the label ids
+        if self.desired_action_ids is not None:
+            # remap the label dict ids
+            label_dict = {k: i for i, k in enumerate(label_dict.keys())}
 
+            for _, value in json_db.items():
+                new_act = []
+                for act in value['annotations']:
+                    if act['label_id'] in self.desired_action_ids:
+                        act['label_id'] = self.label_dict[act['label']]
+                        new_act.append(act)
+                    else:
+                        continue
+                value['annotations'] = new_act
+            
         # fill in the db (immutable afterwards)
         dict_db = tuple()
         for key, value in json_db.items():

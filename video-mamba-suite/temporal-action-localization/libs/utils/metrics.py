@@ -35,7 +35,8 @@ def load_gt_seg_from_json(json_file, split=None, label='label_id', label_offset=
     # load json file
     with open(json_file, "r", encoding="utf8") as f:
         json_db = json.load(f)
-    json_db = json_db['database']
+    if 'database' in json_db:
+        json_db = json_db['database']
 
     vids, starts, stops, labels = [], [], [], []
     for k, v in json_db.items():
