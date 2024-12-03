@@ -20,17 +20,20 @@ from libs.utils import (train_one_epoch, valid_one_epoch, ANETdetection,
                         save_checkpoint, make_optimizer, make_scheduler,
                         fix_random_seed, ModelEma)
 
-def get_cfg(args):
-    """get configuration from a yaml file"""
+
+################################################################################
+def main(args):
+    """main function that handles training / inference"""
+
+    """1. setup parameters / folders"""
+    # parse args
+    args.start_epoch = 0
     if os.path.isfile(args.config):
         cfg = load_config(args.config)
     else:
         raise ValueError("Config file does not exist.")
     pprint(cfg)
-    return cfg
 
-def run(cfg, args, action_label=None):
-    args.start_epoch = 0
     # prep for output folder (based on time stamp)
     if not os.path.exists(cfg['output_folder']):
         os.makedirs(cfg['output_folder'])
@@ -56,7 +59,7 @@ def run(cfg, args, action_label=None):
 
     """2. create dataset / dataloader"""
     train_dataset = make_dataset(
-        cfg['dataset_name'], True, cfg['train_split'], **cfg['dataset'], 
+        cfg['dataset_name'], True, cfg['train_split'], **cfg['dataset']
     )
     # update cfg based on dataset attributes (fix to epic-kitchens)
     train_db_vars = train_dataset.get_attributes()
@@ -163,8 +166,7 @@ def run(cfg, args, action_label=None):
             det_eval = ANETdetection(
                 val_dataset.json_file,
                 val_dataset.split[0],
-                tiou_thresholds = val_db_vars['tiou_thresholds'],
-                only_focus_on = action_label
+                tiou_thresholds = val_db_vars['tiou_thresholds']
             )
             # else:
             #     output_file = os.path.join('eval_results.pkl')
@@ -207,30 +209,6 @@ def run(cfg, args, action_label=None):
     tb_writer.close()
     print("All done!")
     return
-
-################################################################################
-def main(args):
-    """main function that handles training / inference"""
-    cfg = get_cfg(args)
-    
-    # get stage
-    stage = cfg['dataset']['stage_at']
-    assert stage in [1, 2], "Stage must be 1 or 2!"
-    # get desired action label
-    action_label = cfg['dataset']['desired_actions']
-    
-    if stage == 1:
-        assert len(action_label) == 1, "Stage 1 only supports one action label!"
-
-    if cfg['dataset']['num_classes'] == 1:
-        # looping over all actions
-        for action in action_label:
-            output_postfix = f'_{action}'
-            args.output = f'{args.output}{output_postfix}'
-            cfg['dataset']['desired_actions'] = [action]
-            run(cfg, args, action)
-
-
 
 ################################################################################
 if __name__ == '__main__':
