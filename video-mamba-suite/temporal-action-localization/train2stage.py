@@ -127,6 +127,13 @@ def run(cfg, args, action_label=None):
         val_dataset, False, None, 1, cfg['loader']['num_workers']
     )
 
+    val_db_vars = val_dataset.get_attributes()
+    det_eval = ANETdetection(
+                val_dataset.json_file,
+                val_dataset.split[0],
+                tiou_thresholds = val_db_vars['tiou_thresholds'],
+                only_focus_on = action_label
+            )
 
     for epoch in range(args.start_epoch, max_epochs):
         # train for one epoch
@@ -142,7 +149,7 @@ def run(cfg, args, action_label=None):
             print_freq=args.print_freq
         )
         
-        if epoch>=5:#(max_epochs//4):
+        if epoch>=0 or not cfg['opt']['warmup']:#(max_epochs//4):
 
 
         # if epoch>1:#(max_epochs//3):
@@ -157,15 +164,10 @@ def run(cfg, args, action_label=None):
 
 
             # set up evaluator
-            det_eval, output_file = None, None
+            output_file = None
             # if not args.saveonly:
             val_db_vars = val_dataset.get_attributes()
-            det_eval = ANETdetection(
-                val_dataset.json_file,
-                val_dataset.split[0],
-                tiou_thresholds = val_db_vars['tiou_thresholds'],
-                only_focus_on = action_label
-            )
+            
             # else:
             #     output_file = os.path.join('eval_results.pkl')
 
@@ -210,6 +212,7 @@ def run(cfg, args, action_label=None):
 
 ################################################################################
 def main(args):
+    from torch.multiprocessing import Process, set_start_method
     """main function that handles training / inference"""
     cfg = get_cfg(args)
     
@@ -224,13 +227,24 @@ def main(args):
 
     if cfg['dataset']['num_classes'] == 1:
         # looping over all actions
-        for action in action_label:
-            output_postfix = f'_{action}'
-            args.output = f'{args.output}{output_postfix}'
-            cfg['dataset']['desired_actions'] = [action]
-            run(cfg, args, action)
+        output = args.output
 
+        set_start_method('spawn', force=True)
+        processes = []
+        for rank, action in enumerate(action_label):
+            p = Process(target=train_action, args=(cfg, args, output, action,rank))
+            p.start()
+            processes.append(p)
+        
+        for p in processes:
+            p.join()
 
+def train_action(cfg, args, output, action, rank):
+    output_prefix = f'{action}_'
+    args.output = f'{output_prefix}{output}'
+    cfg['dataset']['desired_actions'] = [action]
+    cfg['devices'] = [f'cuda:{rank}']
+    run(cfg, args, action)
 
 ################################################################################
 if __name__ == '__main__':
