@@ -172,24 +172,47 @@ def main(args):
     }
 
     new_feat_path, new_json_path = None, None
+    # re-extract features
+    new_feat_path = args.cache_dir
+    os.makedirs(new_feat_path, exist_ok=True)
+    cfg['cache_dir'] = args.cache_dir
     if args.re_extract:
-        # re-extract features
-        new_feat_path = args.cache_dir
-        cfg['cache_dir'] = args.cache_dir
         # get center and extend 
         video_root = args.video_root
         assert os.path.isdir(video_root), "Video root does not exist!"
         initI3ds(args)
         # extract features
         new_feat_center = extract_features_from_res(video_root, new_feat_path, args.flow_dir, result, cfg)
-        # build new json file for stage 2 dataset
-        new_json_path = build_tmp_json(cfg, new_feat_center)
     else:
-        # clip target features from video features
-        ...
-        # new feature path
-        # rebuild json file
-        raise NotImplementedError
+        CLIP_DUR = 4
+        # get the original feature
+        old_feat_root = cfg['dataset']['feat_folder']
+        video_rank, cur_video_id = 0, None
+        for idx, res in tqdm(enumerate(result['video-id'])):
+            feat_path = os.path.join(old_feat_root, f"{res}.npy")
+            assert os.path.isfile(feat_path), "Feature file does not exist!"
+            if cur_video_id != res:
+                cur_video_id = res
+                video_rank = 0
+            video_rank += 1
+            seg_id = f'{res}#{video_rank}'
+            new_feat_path = os.path.join(new_feat_path, f"{seg_id}.npy")
+            data = np.load(feat_path)
+            duration = int(res.split("_")[-1])
+            clip_start = result['t-center'][idx] - CLIP_DUR / 2
+            clip_end = result['t-center'][idx] + CLIP_DUR / 2
+            clip_start = max(clip_start, 0)
+            clip_end = min(clip_end, duration)
+            start_ratio = clip_start / duration
+            end_ratio = clip_end / duration
+            start_idx = int(start_ratio * data.shape[0])
+            end_idx = int(end_ratio * data.shape[0])
+            new_data = data[start_idx:end_idx]
+            np.save(new_feat_path, new_data)
+            new_feat_center[seg_id] = result['t-center'][idx]
+        
+     # build new json file for stage 2 dataset
+    new_json_path = build_tmp_json(cfg, new_feat_center)
         
 
     ### Stage 2
@@ -317,7 +340,6 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
         
         # slidedata_flow=slideTensor(flow_data,args.chunk_size,args.frequency)
         saved_new_feat_name = video_id + f"#{per_video_rank}"
-        os.makedirs(new_feat_path, exist_ok=True)
         new_feat_file = os.path.join(new_feat_path, f"{saved_new_feat_name}.npy")
         # extract features
         extract_features(rgb_data, flow_data, new_feat_file, start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP)
