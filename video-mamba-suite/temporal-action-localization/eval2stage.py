@@ -189,6 +189,7 @@ def main(args):
         ...
         # new feature path
         # rebuild json file
+        raise NotImplementedError
         
 
     ### Stage 2
@@ -197,12 +198,12 @@ def main(args):
             cfg = load_config(args.config2)
         else:
             raise ValueError("Config file does not exist.")
-        pprint(cfg)
         cfg['raise_error'] = args.raise_error
         args.saveonly = False
         cfg['dataset']['feat_folder'] = new_feat_path
         cfg['dataset']['json_file'] = new_json_path
         cfg['val_split'] = ['test']
+        pprint(cfg)
         det_eval = ANETdetection(
             eval_dataset.json_file,
             eval_dataset.split[0],
@@ -245,6 +246,7 @@ def main(args):
         else:                                   # multiple classification
             args.ckpt = args.ckpt2
             result = run(cfg, args, action_label=cfg['dataset']['desired_actions'], infer_or_eval=infer_one_epoch)
+            result['label'][result['label'] == 0] = len(label_dict) # correct the label
         # shift t-start and t-end based on stage 1 segment results (+ t-center - 2)
         for idx in range(len(results['video-id'])):
             # get seg_id
