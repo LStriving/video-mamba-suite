@@ -3,7 +3,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from .models import register_backbone
-from .blocks import (get_sinusoid_encoding, TransformerBlock, MaskedConv1D,
+from .blocks import (LocalGlobalTemporalEncoder, get_sinusoid_encoding, TransformerBlock, MaskedConv1D,
                      ConvBlock, LayerNorm, MaskMambaBlock)
 
 
@@ -250,13 +250,19 @@ class MambaBackbone(nn.Module):
         arch = (2, 2, 5),   # (#convs, #stem convs, #branch convs)
         scale_factor = 2,   # dowsampling rate for the branch
         with_ln=False,      # if to use layernorm
+        lgte = False,       # if to use local global temporal encoder (LGTE) enhancement
+        num_lgte_layers = 1, # number of LGTE layers
+        lgte_win = 6,       # window size for LGTE
+        lgte_vswg = False,  # if to use variable size window grouping
+        lgte_dropout = 0.1, # dropout rate for LGTE
+        lgte_tem_scale = 128, # temporal scale for LGTE
     ):
         super().__init__()
         assert len(arch) == 3
         self.arch = arch
         self.relu = nn.ReLU(inplace=True)
         self.scale_factor = scale_factor
-
+        self.use_lgte = lgte
         # embedding network using convs
         self.embd = nn.ModuleList()
         self.embd_norm = nn.ModuleList()
@@ -276,6 +282,15 @@ class MambaBackbone(nn.Module):
                 )
             else:
                 self.embd_norm.append(nn.Identity())
+
+        # LGTE enhancement
+        if self.use_lgte:
+            self.lgtes = nn.ModuleList()
+            for idx in range(num_lgte_layers):
+                self.lgtes.append(LocalGlobalTemporalEncoder(
+                    n_embd, dropout=lgte_dropout, temporal_scale=lgte_tem_scale, window_size=lgte_win, use_vswg=lgte_vswg
+                )
+            )
 
         # stem network using (vanilla) transformer
         self.stem = nn.ModuleList()
@@ -306,6 +321,11 @@ class MambaBackbone(nn.Module):
         for idx in range(len(self.embd)):
             x, mask = self.embd[idx](x, mask)
             x = self.relu(self.embd_norm[idx](x))
+        
+        # LGTE enhancement
+        if self.use_lgte:
+            for layer in self.lgtes:
+                x, mask = layer(x, mask)
 
         # stem conv
         for idx in range(len(self.stem)):

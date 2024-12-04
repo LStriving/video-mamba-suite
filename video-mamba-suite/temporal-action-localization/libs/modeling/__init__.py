@@ -8,4 +8,5 @@ from . import meta_archs     # full models
 
 __all__ = ['MaskedConv1D', 'MaskedMHCA', 'MaskedMHA', 'LayerNorm'
            'TransformerBlock', 'ConvBlock', 'Scale', 'AffineDropPath',
+           'LocalGlobalTemporalEncoder', 
            'make_backbone', 'make_neck', 'make_meta_arch', 'make_generator']

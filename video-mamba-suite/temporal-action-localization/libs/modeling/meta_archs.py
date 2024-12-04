@@ -193,7 +193,8 @@ class PtTransformer(nn.Module):
         use_rel_pe,            # if to use rel position encoding
         num_classes,           # number of action classes
         train_cfg,             # other cfg for training
-        test_cfg               # other cfg for testing
+        test_cfg,              # other cfg for testing
+        *args, **kwargs        # other arguments
     ):
         super().__init__()
         # re-distribute params to backbone / neck / head
@@ -244,6 +245,14 @@ class PtTransformer(nn.Module):
         self.test_nms_sigma = test_cfg['nms_sigma']
         self.test_voting_thresh = test_cfg['voting_thresh']
 
+        # try to get lgte
+        lgte = kwargs.get('lgte', False)
+        
+        self.lgte_win = kwargs.get('lgte_win', 6)
+        self.lgte_vswg = kwargs.get('lgte_vswg', False)
+        self.lgte_dropout = kwargs.get('lgte_dropout', 0.1)
+        self.lgte_tem_scale = kwargs.get('lgte_tem_scale', 128)
+
         # we will need a better way to dispatch the params to backbones / necks
         # backbone network: conv + transformer
         assert backbone_type in ['convTransformer', 'conv', 'mamba']
@@ -276,7 +285,12 @@ class PtTransformer(nn.Module):
                     'n_embd_ks': embd_kernel_size,
                     'arch': backbone_arch,
                     'scale_factor': scale_factor,
-                    'with_ln' : embd_with_ln
+                    'with_ln' : embd_with_ln,
+                    'lgte': lgte,
+                    'lgte_win': self.lgte_win,
+                    'lgte_vswg': self.lgte_vswg,
+                    'lgte_dropout': self.lgte_dropout,
+                    'lgte_tem_scale': self.lgte_tem_scale
                 }
             )
         else:
