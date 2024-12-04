@@ -1,0 +1,10 @@
+# extracted features
+*.npy
+# ckpt
+*.pt
+*.pth
+*.pth.tar
+# debug
+*debug*
+# cache
+__pycache__
