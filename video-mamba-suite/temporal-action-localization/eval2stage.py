@@ -183,11 +183,12 @@ def main(args):
         initI3ds(args)
         # extract features
         new_feat_center = extract_features_from_res(video_root, new_feat_path, args.flow_dir, result, cfg)
-    else:
+    else: # much faster but worser performance (drop 10% mAP)
         CLIP_DUR = 4
         # get the original feature
         old_feat_root = cfg['dataset']['feat_folder']
         video_rank, cur_video_id = 0, None
+        new_feat_center = {}
         for idx, res in tqdm(enumerate(result['video-id'])):
             feat_path = os.path.join(old_feat_root, f"{res}.npy")
             assert os.path.isfile(feat_path), "Feature file does not exist!"
@@ -196,7 +197,7 @@ def main(args):
                 video_rank = 0
             video_rank += 1
             seg_id = f'{res}#{video_rank}'
-            new_feat_path = os.path.join(new_feat_path, f"{seg_id}.npy")
+            crop_feat_path = os.path.join(new_feat_path, f"{seg_id}.npy")
             data = np.load(feat_path)
             duration = int(res.split("_")[-1])
             clip_start = result['t-center'][idx] - CLIP_DUR / 2
@@ -208,7 +209,7 @@ def main(args):
             start_idx = int(start_ratio * data.shape[0])
             end_idx = int(end_ratio * data.shape[0])
             new_data = data[start_idx:end_idx]
-            np.save(new_feat_path, new_data)
+            np.save(crop_feat_path, new_data)
             new_feat_center[seg_id] = result['t-center'][idx]
         
      # build new json file for stage 2 dataset

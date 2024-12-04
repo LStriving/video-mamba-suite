@@ -4,6 +4,7 @@ import os
 import time
 import datetime
 from pprint import pprint
+import numpy as np
 
 # torch imports
 import torch
@@ -16,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from libs.core import load_config
 from libs.datasets import make_dataset, make_data_loader
 from libs.modeling import make_meta_arch
-from libs.utils import (train_one_epoch, valid_one_epoch, ANETdetection,
+from libs.utils import (train_one_epoch, valid_one_epoch, infer_one_epoch, ANETdetection,
                         save_checkpoint, make_optimizer, make_scheduler,
                         fix_random_seed, ModelEma)
 
@@ -134,6 +135,18 @@ def run(cfg, args, action_label=None):
                 tiou_thresholds = val_db_vars['tiou_thresholds'],
                 only_focus_on = action_label
             )
+    train_label_dict = val_dataset.label_dict
+    eval_label_dict = get_label_dict_from_file(val_dataset.json_file, action_label)
+    remap = False
+    for label, train_label_id in train_label_dict.items():
+        if label in eval_label_dict:
+            if train_label_id != eval_label_dict[label]:
+                remap = True
+                break
+        else:
+            print(f"Warning: {label} not found in eval_label_dict")
+            remap = True
+            break
 
     for epoch in range(args.start_epoch, max_epochs):
         # train for one epoch
@@ -149,7 +162,9 @@ def run(cfg, args, action_label=None):
             print_freq=args.print_freq
         )
         
-        if epoch>=0 or not cfg['opt']['warmup']:#(max_epochs//4):
+        start_eval = 5 if max_epochs > 30 else 0
+
+        if epoch>=start_eval or not cfg['opt']['warmup']:#(max_epochs//4):
 
 
         # if epoch>1:#(max_epochs//3):
@@ -174,7 +189,7 @@ def run(cfg, args, action_label=None):
             """5. Test the model"""
             print("\nStart testing model {:s} ...".format(cfg['model_name']))
             start = time.time()
-            mAP = valid_one_epoch(
+            result = infer_one_epoch(
                 val_loader,
                 model_eval,
                 -1,
@@ -184,6 +199,17 @@ def run(cfg, args, action_label=None):
                 tb_writer=tb_writer,
                 print_freq=999999 #args.print_freq
             )
+            # remap action labels
+            if remap:
+                for label, train_label_id in train_label_dict.items():
+                    if label in eval_label_dict:
+                        result['label'][result['label'] == train_label_id] = eval_label_dict[label] + 1000
+                    else:
+                        print(f"Warning: {label} not found in eval_label_dict")
+                result['label'] -= 1000
+            _, mAP = det_eval.evaluate(result)
+            if tb_writer is not None:
+                tb_writer.add_scalar('validation/mAP', mAP, epoch)
             end = time.time()
             # print("All done! Total time: {:0.2f} sec".format(end - start))
             print(epoch,mAP)
@@ -238,6 +264,8 @@ def main(args):
         
         for p in processes:
             p.join()
+    else:
+        run(cfg, args, action_label)
 
 def train_action(cfg, args, output, action, rank):
     output_prefix = f'{action}_'
@@ -245,6 +273,22 @@ def train_action(cfg, args, output, action, rank):
     cfg['dataset']['desired_actions'] = [action]
     cfg['devices'] = [f'cuda:{rank}']
     run(cfg, args, action)
+
+def get_label_dict_from_file(json_file, action_label):
+    import json
+    with open(json_file, 'r') as fid:
+        data = json.load(fid)
+    label_dict = {}
+    
+    for _, v in data.items():
+        for act in v['annotations']:
+            if action_label is None:
+                label_dict[act['label']] = act['label_id']
+            else:
+                if act['label'] in action_label:
+                    label_dict[act['label']] = act['label_id']
+
+    return label_dict
 
 ################################################################################
 if __name__ == '__main__':
