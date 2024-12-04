@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: mamba swallow e2e",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/video-mamba-suite/temporal-action-localization/train_eval.py",
+            "console": "integratedTerminal",
+            "args": [
+                "video-mamba-suite/temporal-action-localization/configs/mamba_swallow_i3d_stage1.yaml",
+                "--output",
+                "mamba_swallow_stage1"
+            ]
+        },
+        {
+            "name": "Python: mamba swallow stage2",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/video-mamba-suite/temporal-action-localization/train2stage.py",
+            "console": "integratedTerminal",
+            "args": [
+                "video-mamba-suite/temporal-action-localization/configs/2stage/mamba_swallow_i3d_firststage.yaml",
+                "--output",
+                "debug"
+            ]
+        }
+    ]
+}

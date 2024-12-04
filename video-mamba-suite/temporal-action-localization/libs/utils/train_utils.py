@@ -362,23 +362,16 @@ def train_one_epoch(
     return
 
 
-def valid_one_epoch(
+def infer_one_epoch(
     val_loader,
     model,
     curr_epoch,
     ext_score_file = None,
-    evaluator = None,
     output_file = None,
-    tb_writer = None,
     print_freq = 20,
     **kwargs
 ):
-    """Test the model on the validation set"""
-    # either evaluate the results or save the results
-    # assert (evaluator is not None) or (output_file is not None)
-
-    # set up meters
-    batch_time = AverageMeter()
+    '''Infer the model on the validation set'''
     # switch to evaluate mode
     model.eval()
     # dict for results (for our evaluation code)
@@ -427,15 +420,40 @@ def valid_one_epoch(
     results['t-end'] = torch.cat(results['t-end']).numpy()
     results['label'] = torch.cat(results['label']).numpy()
     results['score'] = torch.cat(results['score']).numpy()
-
-    if evaluator is not None:
-        if (ext_score_file is not None) and isinstance(ext_score_file, str):
     
-            results = postprocess_results(results, ext_score_file)
+    if output_file is not None:
+        with open(output_file, 'wb') as f:
+            pickle.dump(results, f)
+    return results
+
+
+def valid_one_epoch(
+    val_loader,
+    model,
+    curr_epoch,
+    ext_score_file = None,
+    evaluator = None,
+    output_file = None,
+    tb_writer = None,
+    print_freq = 20,
+    **kwargs
+):
+    """Test the model on the validation set"""
+    # either evaluate the results or save the results
+    # assert (evaluator is not None) or (output_file is not None)
+
+    results = infer_one_epoch(
+        val_loader,
+        model,
+        curr_epoch,
+        ext_score_file,
+        output_file,
+        print_freq,
+        **kwargs
+    )
     # call the evaluator
     
     _, mAP = evaluator.evaluate(results, verbose=True)
-
 
     # log mAP to tb_writer
     if tb_writer is not None:

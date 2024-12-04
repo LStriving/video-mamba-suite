@@ -31,7 +31,7 @@ def remove_duplicate_annotations(ants, tol=1e-3):
     return valid_events
 
 
-def load_gt_seg_from_json(json_file, split=None, label='label_id', label_offset=0):
+def load_gt_seg_from_json(json_file, split=None, label='label_id', label_offset=0, cared_label_names=None):
     # load json file
     with open(json_file, "r", encoding="utf8") as f:
         json_db = json.load(f)
@@ -47,9 +47,12 @@ def load_gt_seg_from_json(json_file, split=None, label='label_id', label_offset=
         # remove duplicated instances
         ants = remove_duplicate_annotations(v['annotations'])
         # video id
-        vids += [k] * len(ants)
+        # vids += [k] * len(ants)
         # for each event, grab the start/end time and label
         for event in ants:
+            if cared_label_names is not None and event['label'] not in cared_label_names:
+                continue
+            vids += [k]
             starts += [float(event['segment'][0])]
             stops += [float(event['segment'][1])]
             if isinstance(event[label], (Tuple, List)):
@@ -122,6 +125,7 @@ class ANETdetection(object):
         label_offset=0,
         num_workers=8,
         dataset_name=None,
+        only_focus_on=None,
     ):
 
         self.tiou_thresholds = tiou_thresholds
@@ -135,7 +139,7 @@ class ANETdetection(object):
         # Import ground truth and predictions
         self.split = split
         self.ground_truth = load_gt_seg_from_json(
-            ant_file, split=self.split, label=label, label_offset=label_offset)
+            ant_file, split=self.split, label=label, label_offset=label_offset, cared_label_names=only_focus_on)
 
         # remove labels that does not exists in gt
         self.activity_index = {j: i for i, j in enumerate(sorted(self.ground_truth['label'].unique()))}

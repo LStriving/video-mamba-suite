@@ -33,6 +33,10 @@ DEFAULTS = {
         # if true, force upsampling of the input features into a fixed size
         # only used for ActivityNet
         "force_upsampling": False,
+        # 2 stage
+        "two_stage": False,
+        "stage_at": 0,
+        "desired_actions": None,
     },
     "loader": {
         "batch_size": 8,

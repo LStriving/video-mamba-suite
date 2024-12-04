@@ -37,7 +37,7 @@ class SwallowDataset(Dataset):
         feature_type="",
         two_stage=False, # two stage training
         stage_at=0,      # stage to start training
-        desired_action_ids=None, # desired action ids
+        desired_actions=None, # desired action label names
     ):
         # file path
         # # assert os.path.exists(feat_folder) and os.path.exists(json_file)
@@ -75,13 +75,15 @@ class SwallowDataset(Dataset):
         
         # two stage training
         self.two_stage = two_stage
-        assert stage_at in [1, 2] if self.two_stage else None
+        if self.two_stage is True:
+            assert stage_at in [1, 2]
         self.stage_at = stage_at
+        self.desired_actions = desired_actions
 
         # load database and select the subset
         dict_db, label_dict = self._load_json_db(self.json_file)
         assert len(label_dict) == num_classes or \
-                len(label_dict) == len(desired_action_ids), f'{len(label_dict)} vs {num_classes}, label dict: {label_dict}'
+                len(label_dict) == len(desired_actions), f'{len(label_dict)} vs {num_classes}, label dict: {label_dict}'
         self.data_list = dict_db
         self.label_dict = label_dict
 
@@ -108,22 +110,22 @@ class SwallowDataset(Dataset):
             label_dict = {}
             for key, value in json_db.items():
                 for act in value['annotations']:
-                    if self.desired_action_ids is not None and act['label_id'] in self.desired_action_ids:
+                    if self.desired_actions is not None and act['label'] in self.desired_actions:
                         label_dict[act['label']] = act['label_id']
-                    elif self.desired_action_ids is None:
+                    elif self.desired_actions is None:
                         label_dict[act['label']] = act['label_id']
-                    elif act['label_id'] not in self.desired_action_ids:
+                    elif act['label'] not in self.desired_actions:
                         continue
         # remap the label ids
-        if self.desired_action_ids is not None:
+        if self.desired_actions is not None:
             # remap the label dict ids
             label_dict = {k: i for i, k in enumerate(label_dict.keys())}
 
             for _, value in json_db.items():
                 new_act = []
                 for act in value['annotations']:
-                    if act['label_id'] in self.desired_action_ids:
-                        act['label_id'] = self.label_dict[act['label']]
+                    if act['label'] in self.desired_actions:
+                        act['label_id'] = label_dict[act['label']]
                         new_act.append(act)
                     else:
                         continue
