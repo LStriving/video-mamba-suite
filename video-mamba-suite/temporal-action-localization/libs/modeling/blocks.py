@@ -953,8 +953,8 @@ class MaskMambaBlock(nn.Module):
 class LocalGlobalTemporalEncoder(nn.Module):
     def __init__(self, input_dim, dropout, temporal_scale=128, window_size=41,use_vswg=False):
         super(LocalGlobalTemporalEncoder, self).__init__()
-        dim_feedforward = 256
-        self.self_atten = GlobalLocalAttention(input_dim, num_heads=8, dropout=0.1, temporal_scale=temporal_scale, window_size=window_size,use_vswg=use_vswg)
+        dim_feedforward = 256       # bottleneck like (512 -> 256 -> 512)
+        self.self_atten = GlobalLocalAttention(input_dim, num_heads=8, dropout=0.11, temporal_scale=temporal_scale, window_size=window_size,use_vswg=use_vswg)
         self.linear1 = nn.Linear(input_dim, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, input_dim)
@@ -964,16 +964,19 @@ class LocalGlobalTemporalEncoder(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, features, mask):  # TODO: add mask
-        src = features.permute(2, 0, 1)
+        # mask [B, 1, T]
+        src = features.permute(2, 0, 1) # A2NET: b, 512, 128; actionmamba: b, 512, 192
+        # src: [T, B, C]
         q = k = src
-        src2 = self.self_atten(q, k, src)[0]
+        src2 = self.self_atten(q, k, src, mask)[0]
         src = src + self.dropout1(src2)
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+        src2 = src2 * mask.permute(2, 0, 1).to(src2.dtype)
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         src = src.permute(1, 2, 0)
-        return src
+        return src, mask
 
 
 class GlobalLocalAttention(nn.Module):
@@ -988,8 +991,8 @@ class GlobalLocalAttention(nn.Module):
                                                   dropout=dropout)
         self.mask_matrix = nn.Parameter(self._mask_matrix(window_size).float(), requires_grad=False)
         if use_vswg:
-            self.attenLinear1=nn.Linear(512,1).cuda()
-            self.attenLinear2=nn.Linear(512,1).cuda()
+            self.attenLinear1=nn.Linear(512,1)
+            self.attenLinear2=nn.Linear(512,1)
             nn.init.kaiming_normal_(self.attenLinear1.weight,mode='fan_in')
             nn.init.kaiming_normal_(self.attenLinear2.weight,mode='fan_in')
         self.window_size=window_size
@@ -1019,47 +1022,53 @@ class GlobalLocalAttention(nn.Module):
         windows_pro=torch.nn.functional.sigmoid(windows_pro)*((self.window_size+1)//2)
         windows_pro=windows_pro.repeat(1,1,1,(self.window_size+1)//2)
         T=0.0001
-        pos_emb=torch.from_numpy(np.arange(0,(self.window_size+1)//2)).cuda().view(1,1,1,-1)
+        pos_emb=torch.from_numpy(np.arange(0,(self.window_size+1)//2)).to(windows_pro.device).view(1,1,1,-1)
         pos_emb=pos_emb.repeat(windows_pro.shape[0],windows_pro.shape[1],windows_pro.shape[2],1)
         gumble_pro=torch.nn.functional.sigmoid((windows_pro-(self.window_size-1)//2+pos_emb)/T)
         return gumble_pro
 
-    def getwin_pro2(self,heads_query):
+    def getwin_pro2(self,heads_query, feat_mask):
+        # feat_mask: b, 1, t, heads_query: b, 4, t, c
         avg_head_query=nn.functional.avg_pool2d(heads_query,kernel_size=(3,1),stride=1,padding=(1,0))
+        avg_head_query=avg_head_query * feat_mask.unsqueeze(-1).float()
         relu_head_query=nn.functional.leaky_relu(avg_head_query)
-        windows_pro=self.attenLinear2(relu_head_query.view(-1,128,512)).view(-1,4,128,1)
+        windows_pro=self.attenLinear2(relu_head_query.view(-1,self.temporal_scale,512)).view(-1,4,self.temporal_scale,1)
+        # windows_pro: b, 4, t, 1
+        windows_pro= windows_pro.masked_fill(feat_mask.unsqueeze(-1)==0, float("-inf"))
         windows_pro=torch.nn.functional.sigmoid(windows_pro)*((self.window_size+1)//2)
         windows_pro=windows_pro.repeat(1,1,1,(self.window_size+1)//2)
         T=0.0001
-        pos_emb=torch.from_numpy(np.arange(0,(self.window_size+1)//2)).cuda().view(1,1,1,-1)
+        pos_emb=torch.from_numpy(np.arange(0,(self.window_size+1)//2)).to(windows_pro.device).view(1,1,1,-1)
         pos_emb=pos_emb.repeat(windows_pro.shape[0],windows_pro.shape[1],windows_pro.shape[2],1)
-        gumble_pro=torch.nn.functional.sigmoid((windows_pro-pos_emb)/T)
-        return gumble_pro
+        # pos_emb: b, 4, t, 1
+        feat_mask=feat_mask.to(pos_emb.device)
+        residual=((windows_pro-pos_emb)/T).masked_fill(feat_mask.unsqueeze(-1)==0, float("-inf"))
+        gumble_pro=torch.nn.functional.sigmoid(residual)
+        return gumble_pro # b, 4, t, 5
 
-    def forward(self, query, key, value):
-        b = query.size(1)
-        mask_mask = self.mask_matrix.bool().repeat(b, 1, 1, 1)
-        mask=torch.zeros((b,self.num_heads,self.temporal_scale,self.temporal_scale)).float().cuda()
+    def forward(self, query, key, value, feat_mask):
+        # feat_mask: b, 1, t; query: t, b, 512
+        b = query.size(1) # batch size
+        mask_mask = self.mask_matrix.bool().repeat(b, 1, 1, 1) # b, 8, t, t
+        mask=torch.zeros((b,self.num_heads,self.temporal_scale,self.temporal_scale)).float().to(query.device) # b, 8, t, t
         if self.use_slide:
-            heads_query=query.permute(1,0,2).contiguous().unsqueeze(1).repeat(1,self.num_heads//2,1,1)
-            #gumble_pro1=self.getwin_pro1(heads_query)
-            gumble_pro2=self.getwin_pro2(heads_query)
-            pro_num=gumble_pro2.shape[3]
-            gumble_pro_all=torch.zeros(gumble_pro2.shape[:-1]+(pro_num*2-1,)).cuda()
+            heads_query=query.permute(1,0,2).contiguous().unsqueeze(1).repeat(1,self.num_heads//2,1,1) # b, t, c => b, 1, t, c => b, 4, t, c
+            gumble_pro2=self.getwin_pro2(heads_query, feat_mask)
+            pro_num=gumble_pro2.shape[3] # 5
+            gumble_pro_all=torch.zeros(gumble_pro2.shape[:-1]+(pro_num*2-1,)).to(query.device) # b, 4, t, 9
             for i in range(pro_num-1):
                 gumble_pro_all[:,:,:,i]=gumble_pro2[:,:,:,pro_num-1-i]
-            #gumble_pro_all[:,:,:,0:pro_num]=gumble_pro1
             gumble_pro_all[:,:,:,pro_num-1:pro_num*2-1]=gumble_pro2
-            #gumble_pro=F.gumbel_softmax(windows_pro,hard=True,tau=1)
-            ##gumble_pro=windows_pro
-            #for i in range(pro_num-1):
-            #    gumble_pro[:,:,:,pro_num-i-2]+=gumble_pro[:,:,:,pro_num-i-1]
             for i in range(self.local_len):
                 for j in range(self.temporal_scale):
                     start_ind=max(0,j - self.window_size // 2)
                     end_ind=min(j + self.window_size // 2,self.temporal_scale-1)
                     mask[:, i, j, start_ind:end_ind+1] =gumble_pro_all[:,i,j,start_ind-j+self.window_size // 2:end_ind-j+self.window_size//2+1] 
             mask[:,self.local_len:,:,:]=1
+        # feat_mask: b, 1, t => b, 1, t, t
+        feat_mask = feat_mask.unsqueeze(2).repeat(1, 1, self.temporal_scale, 1).bool()
+        mask *= feat_mask.float().to(mask.device)
+        mask_mask *= feat_mask.bool().to(mask_mask.device)
         r, w = self.scale_attention(query, key, value, key_padding_mask=mask_mask,slide_mask=mask)
         return r, w
     

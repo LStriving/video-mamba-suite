@@ -248,7 +248,8 @@ class PtTransformer(nn.Module):
         # try to get lgte
         lgte = kwargs.get('lgte', False)
         
-        self.lgte_win = kwargs.get('lgte_win', 6)
+        self.lgte_win = kwargs.get('lgte_win', 7)
+        assert self.lgte_win % 2 == 1, "LGTE window size must be odd"
         self.lgte_vswg = kwargs.get('lgte_vswg', False)
         self.lgte_dropout = kwargs.get('lgte_dropout', 0.1)
         self.lgte_tem_scale = kwargs.get('lgte_tem_scale', 128)

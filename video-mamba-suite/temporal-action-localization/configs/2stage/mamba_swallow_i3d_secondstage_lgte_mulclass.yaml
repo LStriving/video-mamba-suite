@@ -6,7 +6,7 @@ dataset: {
   feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
   file_prefix: ~,
   file_ext: .npy,
-  num_classes: 1,
+  num_classes: 7,
   input_dim: 2048,
   feature_type: "",
   # feature_type: "_spatial_feature",
@@ -33,14 +33,14 @@ model: {
   scale_factor: 2,
   fpn_type: identity,
   lgte: True,
-  lgte_win: 41,
+  lgte_win: 7, # odd number
   lgte_vswg: True,
   lgte_tem_scale: 192,
   lgte_dropout: 0.1,
 }
 opt: {
   learning_rate: 0.0001,
-  epochs: 10,
+  epochs: 45,
   weight_decay: 0.05,
   warmup: True,
   warmup_epochs: 5,
