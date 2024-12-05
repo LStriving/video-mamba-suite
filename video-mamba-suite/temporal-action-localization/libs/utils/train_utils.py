@@ -467,3 +467,180 @@ def valid_one_epoch(
         tb_writer.add_scalar('validation/mAP', mAP, curr_epoch)
 
     return mAP
+
+
+def twotower_train_one_epoch(
+    train_loader,
+    train_loader2,
+    model,
+    optimizer,
+    scheduler,
+    curr_epoch,
+    model_ema = None,
+    clip_grad_l2norm = -1,
+    tb_writer = None,
+    print_freq = 20
+):
+    """Training the model for one epoch"""
+    # set up meters
+    batch_time = AverageMeter()
+    losses_tracker = {}
+    # number of iterations per epoch
+    assert len(train_loader) == len(train_loader2), "Two loaders should have the same length"
+    num_iters = len(train_loader)
+    # switch to train mode
+    model.train()
+
+    # main training loop
+    print("\n[Train]: Epoch {:d} started".format(curr_epoch))
+    start = time.time()
+    for iter_idx, (video_list, heatmap_list) in (enumerate(zip(train_loader, train_loader2), 0)):
+        # zero out optim
+        optimizer.zero_grad(set_to_none=True)
+        # forward / backward the model
+        losses = model(video_list, heatmap_list)
+        losses['final_loss'].backward()
+        # gradient cliping (to stabilize training if necessary)
+        if clip_grad_l2norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                clip_grad_l2norm
+            )
+        # step optimizer / scheduler
+        optimizer.step()
+        scheduler.step()
+
+        if model_ema is not None:
+            model_ema.update(model)
+
+        # printing (only check the stats when necessary to avoid extra cost)
+        if (iter_idx != 0) and (iter_idx % print_freq) == 0:
+            # measure elapsed time (sync all kernels)
+            torch.cuda.synchronize()
+            batch_time.update((time.time() - start) / print_freq)
+            start = time.time()
+
+            # track all losses
+            for key, value in losses.items():
+                # init meter if necessary
+                if key not in losses_tracker:
+                    losses_tracker[key] = AverageMeter()
+                # update
+                losses_tracker[key].update(value.item())
+
+            # log to tensor board
+            lr = scheduler.get_last_lr()[0]
+            global_step = curr_epoch * num_iters + iter_idx
+            if tb_writer is not None:
+                # learning rate (after stepping)
+                tb_writer.add_scalar(
+                    'train/learning_rate',
+                    lr,
+                    global_step
+                )
+                # all losses
+                tag_dict = {}
+                for key, value in losses_tracker.items():
+                    if key != "final_loss":
+                        tag_dict[key] = value.val
+                tb_writer.add_scalars(
+                    'train/all_losses',
+                    tag_dict,
+                    global_step
+                )
+                # final loss
+                tb_writer.add_scalar(
+                    'train/final_loss',
+                    losses_tracker['final_loss'].val,
+                    global_step
+                )
+
+            # print to terminal
+            block1 = 'Epoch: [{:03d}][{:05d}/{:05d}]'.format(
+                curr_epoch, iter_idx, num_iters
+            )
+            block2 = 'Time {:.2f} ({:.2f})'.format(
+                batch_time.val, batch_time.avg
+            )
+            block3 = 'Loss {:.2f} ({:.2f})\n'.format(
+                losses_tracker['final_loss'].val,
+                losses_tracker['final_loss'].avg
+            )
+            block4 = ''
+            for key, value in losses_tracker.items():
+                if key != "final_loss":
+                    block4  += '\t{:s} {:.2f} ({:.2f})'.format(
+                        key, value.val, value.avg
+                    )
+
+            # print('\t'.join([block1, block2, block3, block4]))
+
+    # finish up and print
+    lr = scheduler.get_last_lr()[0]
+    # print("[Train]: Epoch {:d} finished with lr={:.8f}\n".format(curr_epoch, lr))
+    return
+
+def twotower_infer_one_epoch(
+    val_loader,
+    val_loader2,
+    model,
+    curr_epoch,
+    ext_score_file = None,
+    output_file = None,
+    print_freq = 20,
+    **kwargs
+):
+    '''Infer the model on the validation set'''
+    # switch to evaluate mode
+    model.eval()
+    # dict for results (for our evaluation code)
+    results = {
+        'video-id': [],
+        't-start' : [],
+        't-end': [],
+        'label': [],
+        'score': []
+    }
+
+    # loop over validation set
+    start = time.time()
+    for iter_idx, (video_list, heatmap_list) in enumerate(zip(val_loader, val_loader2), 0):
+        # forward the model (wo. grad)
+        with torch.no_grad():
+            output = model(video_list, heatmap_list)
+
+            # upack the results into ANet format
+            num_vids = len(output)
+            for vid_idx in range(num_vids):
+                if output[vid_idx]['segments'].shape[0] > 0:
+                    results['video-id'].extend(
+                        [output[vid_idx]['video_id']] *
+                        output[vid_idx]['segments'].shape[0]
+                    )
+                    results['t-start'].append(output[vid_idx]['segments'][:, 0])
+                    results['t-end'].append(output[vid_idx]['segments'][:, 1])
+                    results['label'].append(output[vid_idx]['labels'])
+                    results['score'].append(output[vid_idx]['scores'])
+
+        # printing
+        # if (iter_idx != 0) and iter_idx % (print_freq) == 0:
+        #     # measure elapsed time (sync all kernels)
+        #     torch.cuda.synchronize()
+        #     batch_time.update((time.time() - start) / print_freq)
+        #     start = time.time()
+
+        #     # print timing
+        #     print('Test: [{0:05d}/{1:05d}]\t'
+        #           'Time {batch_time.val:.2f} ({batch_time.avg:.2f})'.format(
+        #           iter_idx, len(val_loader), batch_time=batch_time))
+
+    # gather all stats and evaluate
+    results['t-start'] = torch.cat(results['t-start']).numpy()
+    results['t-end'] = torch.cat(results['t-end']).numpy()
+    results['label'] = torch.cat(results['label']).numpy()
+    results['score'] = torch.cat(results['score']).numpy()
+    
+    if output_file is not None:
+        with open(output_file, 'wb') as f:
+            pickle.dump(results, f)
+    return results

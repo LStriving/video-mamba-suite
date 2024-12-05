@@ -130,6 +130,9 @@ DEFAULTS = {
         # in #epochs excluding warmup
         "schedule_steps": [],
         "schedule_gamma": 0.1,
+    },
+    "keypoint":{
+        "model_path": "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt",
     }
 }
 

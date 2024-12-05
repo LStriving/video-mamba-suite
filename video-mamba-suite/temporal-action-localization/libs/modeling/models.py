@@ -32,6 +32,14 @@ def register_meta_arch(name):
         return cls
     return decorator
 
+# two-tower (e.g., Convfusion)
+two_towers = {}
+def register_two_tower(name):
+    def decorator(cls):
+        two_towers[name] = cls
+        return cls
+    return decorator
+
 # builder functions
 def make_backbone(name, **kwargs):
     backbone = backbones[name](**kwargs)
@@ -48,3 +56,7 @@ def make_meta_arch(name, **kwargs):
 def make_generator(name, **kwargs):
     generator = generators[name](**kwargs)
     return generator
+
+def make_two_tower(name, *args, **kwargs):
+    two_tower = two_towers[name](*args, **kwargs)
+    return two_tower

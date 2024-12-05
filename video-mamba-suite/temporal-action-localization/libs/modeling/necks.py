@@ -139,3 +139,60 @@ class FPNIdentity(nn.Module):
             fpn_feats += (x, )
 
         return fpn_feats, fpn_masks
+
+
+@register_neck('fusion_fpn')
+class FusionFPN(nn.Module):
+    '''
+    used for fusion of two towers to reduce the feature dimension
+    '''
+    def __init__(
+        self,
+        in_channels,      # input feature channels, len(in_channels) = # levels
+        out_channel,      # output feature channel
+        start_level=0,    # start fpn level
+        end_level=-1,     # end fpn level
+        activation='none' # activation function
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channel = out_channel
+       
+        # Using 1x1 conv to reduce the dimension
+        self.fusion_convs = nn.ModuleList()
+        for i in range(start_level, end_level):
+            fusion_conv = MaskedConv1D(
+                in_channels[i], out_channel, 1
+            )
+            self.fusion_convs.append(fusion_conv)
+
+        # activation
+        if activation == 'relu':
+            self.activation = nn.ReLU(inplace=True)
+        elif activation == 'sigmoid':
+            self.activation = nn.Sigmoid()
+        elif activation == 'tanh':
+            self.activation = nn.Tanh()
+        elif activation == 'none' or activation is None:
+            self.activation = nn.Identity()
+        elif activation == 'leaky_relu':
+            self.activation = nn.LeakyReLU(inplace=True)
+        else:
+            raise ValueError(f"Unknown activation function: {activation}")
+        
+    def forward(self, inputs, fpn_masks):
+        # inputs must be a list / tuple
+        assert len(inputs) == len(self.in_channels)
+        assert len(fpn_masks) == len(self.in_channels), f"{len(fpn_masks)} != {len(self.in_channels)}"
+
+        # apply 1x1 convs
+        fused_feats = tuple()
+        out_masks = tuple()
+        for i in range(len(self.fusion_convs)):
+            x, out_mask = self.fusion_convs[i](inputs[i], fpn_masks[i])
+            x = self.activation(x)
+            fused_feats += (x, )
+            out_masks += (out_mask, )
+
+        return fused_feats, out_masks
