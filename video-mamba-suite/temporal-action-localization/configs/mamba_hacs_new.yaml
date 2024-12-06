@@ -63,5 +63,5 @@ test_cfg: {
   ext_score_file: ./data/hacs/annotations/hacs_UMTv2_6B_k710+K40_f16_frozenTuning.json_converted.json,
   duration_thresh: 0.1,
 }
-output_folder: ./ckpt_hacs/
+output_folder: ./ckpts/ckpt_hacs/
 

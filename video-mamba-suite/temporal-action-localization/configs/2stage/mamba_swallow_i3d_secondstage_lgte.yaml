@@ -70,4 +70,4 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpt_swallow_stage2_lgte/
+output_folder: ./ckpts/ckpt_swallow_stage2_lgte/
