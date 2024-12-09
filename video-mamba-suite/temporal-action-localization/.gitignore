@@ -8,3 +8,7 @@
 *debug*
 # cache
 __pycache__
+# tensorboard
+*tfevents*
+# ckpt
+ckpts/

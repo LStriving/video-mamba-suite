@@ -133,6 +133,11 @@ DEFAULTS = {
     },
     "keypoint":{
         "model_path": "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt",
+    },
+    "two_tower":{
+        "vw": 0.5,
+        "include_ori_loss": False,
+        "vws": None,
     }
 }
 

@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -5,14 +6,22 @@ from .meta_archs import PtTransformerClsHead, PtTransformerRegHead
 from .models import register_two_tower, make_neck
 
 
-@register_two_tower('Convfusion')
-class Convfusion(nn.Module):
-    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, include_ori_loss=False):
-        super(Convfusion, self).__init__()
+class TwoTower(nn.Module):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, *args, **kwargs):
+        super(TwoTower, self).__init__()
         self.visual_tower = visual_tower
         self.heatmap_tower = heatmap_tower
         self.cfg1 = cfg1
         self.cfg2 = cfg2
+    
+    @property
+    def device(self):
+        return list(set(p.device for p in self.parameters()))[0]
+
+@register_two_tower('Convfusion')
+class Convfusion(TwoTower):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, include_ori_loss=False, *args, **kwargs):
+        super(Convfusion, self).__init__(visual_tower, heatmap_tower, cfg1, cfg2)
         self.include_ori_loss = include_ori_loss
         model_cfg = cfg1['model']
 
@@ -51,7 +60,9 @@ class Convfusion(nn.Module):
             with_ln=head_with_ln
         )
 
-    def forward(self, video_list, heatmap_list): # TODO: CHECK
+    def forward(self, input): # TODO: CHECK
+        video_list = [i[0] for i in input]
+        heatmap_list = [i[1] for i in input]
         # get the FPN features from the visual tower
         visual_fpn_feats, visual_fpn_masks, visual_points = self.get_fpn_feat(self.visual_tower, video_list)
         # get the FPN features from the heatmap tower
@@ -101,13 +112,14 @@ class Convfusion(nn.Module):
                 out_cls_logits, out_offsets,
                 gt_cls_labels, gt_offsets
             )
-            if self.include_ori_loss:
+            if self.include_ori_loss:   # TODO: 1. align heatmap & visual feature 2. use resting forward rather than whole forward function
                 v_losses = self.visual_tower(video_list)
                 h_losses = self.heatmap_tower(heatmap_list)
                 losses['final_loss'] += v_losses['final_loss'] + h_losses['final_loss']
             return losses
 
         else:
+            self.visual_tower.training = False
             # decode the actions (sigmoid / stride, etc)
             results = self.visual_tower.inference(
                 video_list, visual_points, fpn_masks,
@@ -130,9 +142,171 @@ class Convfusion(nn.Module):
         # (shared across all samples in the mini-batch)
         points = module.point_generator(fpn_feats)
         return fpn_feats, fpn_masks, points
-    
-    @property
-    def device(self):
-        # a hacky way to get the device type
-        # will throw an error if parameters are on different devices
-        return list(set(p.device for p in self.parameters()))[0]
+
+@register_two_tower('LogitsAvg')
+class LogitAvg(TwoTower):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.7, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2)
+        self.vw = vw
+        assert 0 <= vw <= 1, "late fusion weight should be in [0, 1]"
+
+    def forward(self, input):
+        video_list = [i[0] for i in input]
+        heatmap_list = [i[1] for i in input]
+        # data item check
+        v_videos = [i['video_id'] for i in video_list]
+        h_videos = [i['video_id'] for i in heatmap_list]
+        assert v_videos == h_videos,\
+        "video list should be the same, make sure the data loader is correct"
+
+        if self.training:
+            v_losses = self.visual_tower(video_list)
+            h_losses = self.heatmap_tower(heatmap_list) # problem occur when second forward
+            losses = v_losses
+            losses['final_loss'] += h_losses['final_loss']
+            return losses
+        else:
+            self.visual_tower.training = False
+            self.heatmap_tower.training = False
+            # fuse logits and offsets
+            v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points = self.old_forward(self.visual_tower, video_list)
+            h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points = self.old_forward(self.heatmap_tower, heatmap_list)
+            #NOTE: may need to check, but okay for now
+            out_cls_logits = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_cls_logits, h_out_cls_logits)] 
+            out_offsets = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_offsets, h_out_offsets)]
+
+            return self.visual_tower.inference(
+                video_list, v_points, v_fpn_masks,
+                out_cls_logits, out_offsets
+            )
+
+
+    def old_forward(self, module, video_list):
+        # batch the video list into feats (B, C, T) and masks (B, 1, T)
+        batched_inputs, batched_masks = module.preprocessing(video_list)
+
+        # forward the network (backbone -> neck -> heads)
+        feats, masks = module.backbone(batched_inputs, batched_masks)
+        fpn_feats, fpn_masks = module.neck(feats, masks)
+        # fpn_feats [16, 256, 768] ..[16, 256, 384]..[16, 256, 24]
+
+        # compute the point coordinate along the FPN
+        # this is used for computing the GT or decode the final results
+        # points: List[T x 4] with length = # fpn levels
+        # (shared across all samples in the mini-batch)
+        points = module.point_generator(fpn_feats)
+
+        # out_cls: List[B, #cls + 1, T_i]
+        out_cls_logits = module.cls_head(fpn_feats, fpn_masks)
+        # out_offset: List[B, 2, T_i]
+        out_offsets = module.reg_head(fpn_feats, fpn_masks)
+
+        # permute the outputs
+        # out_cls: F List[B, #cls, T_i] -> F List[B, T_i, #cls]
+        out_cls_logits = [x.permute(0, 2, 1) for x in out_cls_logits]
+        # out_offset: F List[B, 2 (xC), T_i] -> F List[B, T_i, 2 (xC)]
+        out_offsets = [x.permute(0, 2, 1) for x in out_offsets]
+        # fpn_masks: F list[B, 1, T_i] -> F List[B, T_i]
+        fpn_masks = [x.squeeze(1) for x in fpn_masks]
+        return out_cls_logits, out_offsets, fpn_masks, points
+
+
+# TODO:
+@register_two_tower('LogitsAvg_List')
+class LogitAvg_List(TwoTower):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vws=np.linspace(0.,1.,num=11), *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2)
+        self.vws = vws
+        # iterable
+        assert isinstance(vws, (list, np.ndarray, tuple)), "late fusion weight should be iterable"
+        assert all(0 <= vw <= 1 for vw in vws), "late fusion weight should be in [0, 1]"
+        # assert 0 <= vw <= 1, "late fusion weight should be in [0, 1]"
+        
+    def forward(self, input):
+        video_list = [i[0] for i in input]
+        heatmap_list = [i[1] for i in input]
+        # data item check
+        v_videos = [i['video_id'] for i in video_list]
+        h_videos = [i['video_id'] for i in heatmap_list]
+        assert v_videos == h_videos,\
+        "video list should be the same, make sure the data loader is correct"
+
+        if self.training:
+            v_losses = self.visual_tower(video_list)
+            h_losses = self.heatmap_tower(heatmap_list) # problem occur when second forward
+            losses = v_losses
+            losses['final_loss'] += h_losses['final_loss']
+            return losses
+        else:
+            self.visual_tower.training = False
+            self.heatmap_tower.training = False
+            # fuse logits and offsets
+            v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points = self.old_forward(self.visual_tower, video_list)
+            h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points = self.old_forward(self.heatmap_tower, heatmap_list)
+            #NOTE: may need to check, but okay for now
+            results = []
+            for vw in self.vws:
+                out_cls_logits = [(1 - vw) * h + vw * v for v, h in zip(v_out_cls_logits, h_out_cls_logits)] 
+                out_offsets = [(1 - vw) * h + vw * v for v, h in zip(v_out_offsets, h_out_offsets)]
+
+                res = self.visual_tower.inference(
+                    video_list, v_points, v_fpn_masks,
+                    out_cls_logits, out_offsets
+                )
+                results.append(res)
+            return results
+
+
+    def old_forward(self, module, video_list):
+        # batch the video list into feats (B, C, T) and masks (B, 1, T)
+        batched_inputs, batched_masks = module.preprocessing(video_list)
+
+        # forward the network (backbone -> neck -> heads)
+        feats, masks = module.backbone(batched_inputs, batched_masks)
+        fpn_feats, fpn_masks = module.neck(feats, masks)
+        # fpn_feats [16, 256, 768] ..[16, 256, 384]..[16, 256, 24]
+
+        # compute the point coordinate along the FPN
+        # this is used for computing the GT or decode the final results
+        # points: List[T x 4] with length = # fpn levels
+        # (shared across all samples in the mini-batch)
+        points = module.point_generator(fpn_feats)
+
+        # out_cls: List[B, #cls + 1, T_i]
+        out_cls_logits = module.cls_head(fpn_feats, fpn_masks)
+        # out_offset: List[B, 2, T_i]
+        out_offsets = module.reg_head(fpn_feats, fpn_masks)
+
+        # permute the outputs
+        # out_cls: F List[B, #cls, T_i] -> F List[B, T_i, #cls]
+        out_cls_logits = [x.permute(0, 2, 1) for x in out_cls_logits]
+        # out_offset: F List[B, 2 (xC), T_i] -> F List[B, T_i, 2 (xC)]
+        out_offsets = [x.permute(0, 2, 1) for x in out_offsets]
+        # fpn_masks: F list[B, 1, T_i] -> F List[B, T_i]
+        fpn_masks = [x.squeeze(1) for x in fpn_masks]
+        return out_cls_logits, out_offsets, fpn_masks, points
+
+@register_two_tower('CrossAttnEarlyFusion')
+class CrossAttnEarlyFusion(TwoTower):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, include_ori_loss=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2)
+        self.v2h = ...
+        self.h2v = ...
+
+    def forward(self, input):
+        video_list = [i[0] for i in input]
+        heatmap_list = [i[1] for i in input]
+        if self.training:
+            # cross attention module here
+            
+
+            # forward the visual tower
+            v_losses = self.visual_tower(video_list)
+            h_losses = self.heatmap_tower(heatmap_list)
+            losses = v_losses
+            losses['final_loss'] += h_losses['final_loss']
+            return losses
+        else:
+            self.visual_tower.training = False
+            self.heatmap_tower.training = False
+            ...

@@ -14,13 +14,14 @@ import torch.utils.data
 from torch.utils.tensorboard import SummaryWriter
 
 # our code
+from eval2stage import get_best_pth_from_dir
 from libs.core import load_config
 from libs.datasets import make_dataset, make_data_loader
 from libs.modeling import make_meta_arch, make_two_tower
 from libs.utils import (train_one_epoch, valid_one_epoch, infer_one_epoch, ANETdetection,
-                        save_checkpoint, make_optimizer, make_scheduler, twotower_train_one_epoch,
-                        twotower_infer_one_epoch, fix_random_seed, ModelEma)
+                        save_checkpoint, make_optimizer, make_scheduler, fix_random_seed, ModelEma)
 from train2stage import get_label_dict_from_file
+from libs.datasets.swallow import MultiModalDataset
 
 def get_cfg(config_file):
     if os.path.isfile(config_file):
@@ -63,27 +64,23 @@ def run(cfg, cfg2, args, action_label=None):
     train_dataset = make_dataset(
         cfg['dataset_name'], True, cfg['train_split'], **cfg['dataset'], 
     )
-    # update cfg based on dataset attributes (fix to epic-kitchens)
-    train_db_vars = train_dataset.get_attributes()
-    cfg['model']['train_cfg']['head_empty_cls'] = train_db_vars['empty_label_ids']
-
-    # data loaders
-    train_loader = make_data_loader(
-        train_dataset, True, rng_generator, **cfg['loader'])
-    
     # dataset for tower 2
     train_dataset2 = make_dataset(
         cfg2['dataset_name'], True, cfg2['train_split'], **cfg2['dataset'], 
     )
     # update cfg based on dataset attributes (fix to epic-kitchens)
+    train_db_vars = train_dataset.get_attributes()
+    cfg['model']['train_cfg']['head_empty_cls'] = train_db_vars['empty_label_ids']
+    # update cfg based on dataset attributes (fix to epic-kitchens)
     train_db_vars2 = train_dataset2.get_attributes()
     cfg2['model']['train_cfg']['head_empty_cls'] = train_db_vars2['empty_label_ids']
-
+    # multi-modal dataloader
+    mulmodal_dataset = MultiModalDataset(train_dataset, train_dataset2)
+    
     # data loaders
-    train_loader2 = make_data_loader(
-        train_dataset2, True, rng_generator, **cfg2['loader'])
-    assert len(train_dataset) == len(train_dataset2), "Training datasets must have the same length!"
-
+    train_loader = make_data_loader(
+        mulmodal_dataset, True, rng_generator, **cfg['loader'])
+    
     """3. create model, optimizer, and scheduler"""
     # model
     model = make_meta_arch(cfg['model_name'], **cfg['model'])
@@ -95,8 +92,12 @@ def run(cfg, cfg2, args, action_label=None):
             checkpoint = torch.load(args.backbone_1,
                 map_location = lambda storage, loc: storage.cuda(
                     cfg['devices'][0]))
-            model.load_state_dict(checkpoint['state_dict'])
+            new_kv = {}
+            for k,v in checkpoint['state_dict_ema'].items():
+                new_kv[k.replace("module.","")]=v
+            model.load_state_dict(new_kv)
             print("=> loaded checkpoint '{:s}' for tower 1".format(args.backbone_1))
+            cfg['opt']['learning_rate'] *= 0.1 # reduce learning rate 
             del checkpoint
         else:
             print("=> no checkpoint found at '{}'".format(args.backbone_1))
@@ -106,17 +107,23 @@ def run(cfg, cfg2, args, action_label=None):
             checkpoint = torch.load(args.backbone_2,
                 map_location = lambda storage, loc: storage.cuda(
                     cfg2['devices'][0]))
-            model2.load_state_dict(checkpoint['state_dict'])
+            new_kv = {}
+            for k,v in checkpoint['state_dict_ema'].items():
+                new_kv[k.replace("module.","")]=v
+            model2.load_state_dict(new_kv)
             print("=> loaded checkpoint '{:s}' for tower 2".format(args.backbone_2))
             del checkpoint
+            cfg2['opt']['learning_rate'] *= 0.1 # reduce learning rate # not used
         else:
             print("=> no checkpoint found at '{}'".format(args.backbone_2))
 
+
     # two-tower model
-    model = make_two_tower(args.tower_name, model, model2, cfg, cfg2)
+    model = make_two_tower(args.tower_name, model, model2, cfg, cfg, **cfg['two_tower'])
 
     # not ideal for multi GPU training, ok for now
-    model = nn.DataParallel(model, device_ids=cfg['devices'])
+    if not args.cpu:
+        model = nn.DataParallel(model, device_ids=cfg['devices'])
     # optimizer
     optimizer = make_optimizer(model, cfg['opt'])
     # schedule
@@ -170,18 +177,15 @@ def run(cfg, cfg2, args, action_label=None):
     val_dataset = make_dataset(
         cfg['dataset_name'], False, cfg['val_split'], **cfg['dataset']
     )
-    # set bs = 1, and disable shuffle
-    val_loader = make_data_loader(
-        val_dataset, False, None, 1, cfg['loader']['num_workers']
-    )
     val_dataset2 = make_dataset(
         cfg2['dataset_name'], False, cfg2['val_split'], **cfg2['dataset']
     )
-    val_loader2 = make_data_loader(
-        val_dataset2, False, None, 1, cfg2['loader']['num_workers']
+    valMultidataset = MultiModalDataset(val_dataset, val_dataset2)
+    cfg['loader']['batch_size'] = 1
+    val_loader = make_data_loader(
+        valMultidataset, False, rng_generator, **cfg['loader']
     )
-    assert len(val_dataset) == len(val_dataset2), "Validation datasets must have the same length!"
-
+    
     val_db_vars = val_dataset.get_attributes()
     det_eval = ANETdetection(
                 val_dataset.json_file,
@@ -204,9 +208,8 @@ def run(cfg, cfg2, args, action_label=None):
 
     for epoch in range(args.start_epoch, max_epochs):
         # train for one epoch
-        twotower_train_one_epoch(
+        train_one_epoch(
             train_loader,
-            train_loader2,
             model,
             optimizer,
             scheduler,
@@ -235,9 +238,8 @@ def run(cfg, cfg2, args, action_label=None):
             """5. Test the model"""
             print("\nStart testing model {:s} ...".format(cfg['model_name']))
             start = time.time()
-            result = twotower_infer_one_epoch(
+            result = infer_one_epoch(
                 val_loader,
-                val_loader2,
                 model_eval,
                 -1,
                 evaluator=det_eval,
@@ -288,6 +290,9 @@ def main(args):
     cfg = get_cfg(args.config)
     cfg2 = get_cfg(args.config2)
     
+    if args.cpu: # NOTE: mamba not support cpu for now
+        cfg['devices'] = ['cpu']
+        cfg2['devices'] = ['cpu']
     # get stage
     stage = cfg['dataset']['stage_at']
     assert stage in [1, 2], "Stage must be 1 or 2!"
@@ -303,9 +308,44 @@ def main(args):
         # looping over all actions
         output = args.output
 
+        # load best backbone model
+        backbone_1, backbone_2 = {}, {}
+        if args.backbone_1:
+            assert os.path.isdir(args.backbone_1), "Backbone 1 must be a directory!"
+            ckpt_root_1 = os.listdir(args.backbone_1)
+
+        if args.backbone_2:
+            assert os.path.isdir(args.backbone_2), "Backbone 2 must be a directory!"
+            ckpt_root_2 = os.listdir(args.backbone_2)
+
+        ori_backbone_1 = args.backbone_1
+        ori_backbone_2 = args.backbone_2
+
         set_start_method('spawn', force=True)
         processes = []
         for rank, action in enumerate(action_label):
+            # modify the backbone path
+            if ori_backbone_1:
+                ckpt_dir_1 = [ckpt for ckpt in ckpt_root_1 if action in ckpt]
+                if len(ckpt_dir_1) == 0:
+                    print(f"Error: {action} ckpt not found for backbone 1!")
+                    raise FileNotFoundError
+                elif len(ckpt_dir_1) > 1:
+                    print(f"Warning: multiple {action} ckpt found in backbone 1! Using the first one.")
+                ckpt_dir_1 = ckpt_dir_1[0]
+                best_ckpt = get_best_pth_from_dir(os.path.join(ori_backbone_1, ckpt_dir_1))
+                args.backbone_1 = best_ckpt
+            if ori_backbone_2:
+                args.backbone_2 = os.path.join(ori_backbone_2, action)
+                ckpt_dir_2 = [ckpt for ckpt in ckpt_root_2 if action in ckpt]
+                if len(ckpt_dir_2) == 0:
+                    print(f"Error: {action} ckpt not found for backbone 2!")
+                    raise FileNotFoundError
+                elif len(ckpt_dir_2) > 1:
+                    print(f"Warning: multiple {action} ckpt found in backbone 2! Using the first one.")
+                ckpt_dir_2 = ckpt_dir_2[0]
+                best_ckpt = get_best_pth_from_dir(os.path.join(ori_backbone_2, ckpt_dir_2))
+                args.backbone_2 = best_ckpt
             p = Process(target=train_action, args=(cfg, cfg2, args, output, action, rank))
             p.start()
             processes.append(p)
@@ -319,8 +359,13 @@ def train_action(cfg, cfg2, args, output, action, rank):
     output_prefix = f'{action}_'
     args.output = f'{output_prefix}{output}'
     cfg['dataset']['desired_actions'] = [action]
-    cfg['devices'] = [f'cuda:{rank}']
-    cfg2['devices'] = [f'cuda:{rank}']
+    cfg2['dataset']['desired_actions'] = [action]
+    if args.cpu:
+        cfg['devices'] = ['cpu']
+        cfg2['devices'] = ['cpu']
+    else:
+        cfg['devices'] = [f'cuda:{rank}']
+        cfg2['devices'] = [f'cuda:{rank}']
     run(cfg, cfg2, args, action)
 
 ################################################################################
@@ -347,5 +392,7 @@ if __name__ == '__main__':
                         help='path to a checkpoint for tower 2(default: none)')
     parser.add_argument('--tower_name', default='Convfusion', type=str,
                         help='name of the two-tower model (default: Convfusion)')
+    parser.add_argument('--cpu', action='store_true',
+                        help='use cpu instead of gpu')
     args = parser.parse_args()
     main(args)

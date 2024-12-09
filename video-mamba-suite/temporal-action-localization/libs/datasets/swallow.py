@@ -250,3 +250,17 @@ class SwallowDataset(Dataset):
             )
 
         return data_dict
+
+
+@register_dataset("two-modal")
+class MultiModalDataset(Dataset):
+    def __init__(self, dataset1, dataset2):
+        self.dataset1 = dataset1
+        self.dataset2 = dataset2
+        assert len(dataset1) == len(dataset2), "video list should be the same"
+        
+    def __len__(self):
+        return len(self.dataset1)
+    
+    def __getitem__(self, index):
+        return self.dataset1[index], self.dataset2[index]

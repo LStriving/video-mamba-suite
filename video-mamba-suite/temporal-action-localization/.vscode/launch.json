@@ -62,6 +62,31 @@
             ]
         },
         {
+            "name": "Train: mamba swallow stage2 lgte multiclass",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/train2stage.py",
+            "console": "integratedTerminal",
+            "args": [
+                "configs/2stage/mamba_swallow_i3d_secondstage_lgte_mulclass.yaml",
+                "--output",
+                "debug"
+            ]
+        },
+        {
+            "name": "Train: mamba swallow stage2 3modal",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/train2tower.py",
+            "console": "integratedTerminal",
+            "args": [
+                "configs/2stage/mamba_swallow_i3d_secondstage.yaml",
+                "configs/2stage/heatmap/mamba_swallow_heatmap_secondstage.yaml",
+                "--output",
+                "debug"
+            ]
+        },
+        {
             "name": "Eval: mamba swallow 2stage",
             "type": "python",
             "request": "launch",
@@ -91,6 +116,19 @@
                 "configs/2stage/mamba_swallow_i3d_eval_stage1.yaml",
                 "--ckpt",
                 "/mnt/cephfs/home/liyirui/project/video-mamba-suite/video-mamba-suite/temporal-action-localization/ckpt_swallow/mamba_swallow_i3d_stage1_mamba_swallow_stage1_2_0.0001/epoch_024_0.82621.pth.tar",
+            ]
+        },
+        {
+            "name": "Train: mamba swallow LogitAvg",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/train2tower.py",
+            "console": "integratedTerminal",
+            "args": [
+                "configs/2stage/vw/mamba_swallow_i3d_secondstage_2tower_10ep_vw0.9.yaml",
+                "configs/2stage/heatmap/mamba_swallow_heatmap_secondstage_newfeat.yaml",
+                "--tower_name",
+                "LogitsAvg",
             ]
         }
     ]
