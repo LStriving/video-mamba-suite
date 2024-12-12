@@ -138,7 +138,7 @@ DEFAULTS = {
         "vw": 0.5,
         "include_ori_loss": False,
         "vws": None,
-    }
+    },
 }
 
 def _merge(src, dst):
@@ -160,6 +160,8 @@ def _update_config(config):
     config["model"]["max_seq_len"] = config["dataset"]["max_seq_len"]
     config["model"]["train_cfg"] = config["train_cfg"]
     config["model"]["test_cfg"] = config["test_cfg"]
+    config['model']['image_stem_cfg'] = config['image_stem']
+    config['model']['video_stem_cfg'] = config['video_stem']
     return config
 
 def load_config(config_file, defaults=DEFAULTS):

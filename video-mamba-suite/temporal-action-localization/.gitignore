@@ -12,3 +12,5 @@ __pycache__
 *tfevents*
 # ckpt
 ckpts/
+# log files
+*.log

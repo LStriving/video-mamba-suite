@@ -38,6 +38,18 @@
             ]
         },
         {
+            "name": "Train: heatmap stage2 E2E resnet feat (proj+mvit)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/train2stage.py",
+            "console": "integratedTerminal",
+            "args": [
+                "configs/2stage/heatmap/e2e/heatmap_secondstage_resnet_fix_mvit_p2l3.yaml",
+                "--output",
+                "debug"
+            ]
+        },
+        {
             "name": "Train: mamba swallow stage2 multiclass",
             "type": "python",
             "request": "launch",

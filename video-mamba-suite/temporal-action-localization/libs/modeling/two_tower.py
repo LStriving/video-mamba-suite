@@ -160,26 +160,16 @@ class LogitAvg(TwoTower):
         "video list should be the same, make sure the data loader is correct"
 
         if self.training:
-            v_losses = self.visual_tower(video_list)
-            h_losses = self.heatmap_tower(heatmap_list) # problem occur when second forward
-            losses = v_losses
-            losses['final_loss'] += h_losses['final_loss']
-            return losses
+            return self.train_forward(video_list, heatmap_list)
         else:
-            self.visual_tower.training = False
-            self.heatmap_tower.training = False
-            # fuse logits and offsets
-            v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points = self.old_forward(self.visual_tower, video_list)
-            h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points = self.old_forward(self.heatmap_tower, heatmap_list)
-            #NOTE: may need to check, but okay for now
-            out_cls_logits = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_cls_logits, h_out_cls_logits)] 
-            out_offsets = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_offsets, h_out_offsets)]
+            return self.inference_forward(video_list, heatmap_list)
 
-            return self.visual_tower.inference(
-                video_list, v_points, v_fpn_masks,
-                out_cls_logits, out_offsets
-            )
-
+    def train_forward(self, video_list, heatmap_list):
+        v_losses = self.visual_tower(video_list)
+        h_losses = self.heatmap_tower(heatmap_list) # problem occur when second forward
+        losses = v_losses
+        losses['final_loss'] += h_losses['final_loss']
+        return losses
 
     def old_forward(self, module, video_list):
         # batch the video list into feats (B, C, T) and masks (B, 1, T)
@@ -210,6 +200,30 @@ class LogitAvg(TwoTower):
         fpn_masks = [x.squeeze(1) for x in fpn_masks]
         return out_cls_logits, out_offsets, fpn_masks, points
 
+    def inference_forward(self, video_list, heatmap_list):
+        self.visual_tower.training = False
+        self.heatmap_tower.training = False
+        # fuse logits and offsets
+        v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points = self.old_forward(self.visual_tower, video_list)
+        h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points = self.old_forward(self.heatmap_tower, heatmap_list)
+        #NOTE: may need to check, but okay for now
+        out_cls_logits = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_cls_logits, h_out_cls_logits)] 
+        out_offsets = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_offsets, h_out_offsets)]
+
+        return self.visual_tower.inference(
+            video_list, v_points, v_fpn_masks,
+            out_cls_logits, out_offsets
+        )
+
+@register_two_tower('LogitsAvg_sepbranch')
+class LogitAvg_sepbranch(LogitAvg):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.7, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2, vw)
+    
+    def train_forward(self, video_list, heatmap_list):
+        v_losses = self.visual_tower(video_list)
+        h_losses = self.heatmap_tower(heatmap_list)
+        return v_losses, h_losses
 
 # TODO:
 @register_two_tower('LogitsAvg_List')
@@ -298,7 +312,7 @@ class CrossAttnEarlyFusion(TwoTower):
         heatmap_list = [i[1] for i in input]
         if self.training:
             # cross attention module here
-            
+
 
             # forward the visual tower
             v_losses = self.visual_tower(video_list)

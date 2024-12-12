@@ -322,6 +322,131 @@ class MaskedMHCA(nn.Module):
         return out, qx_mask
 
 
+class MaskedPoolingMHCA(nn.Module):
+    """
+    MViT-style Multi Head Conv Attention with mask (pooling attention)
+    """
+    def __init__(
+        self,
+        n_embd,           # dimension of the output features
+        n_head,           # number of heads in multi-head self-attention
+        n_qx_stride=1,    # dowsampling stride for query and input
+        n_kv_stride=1,    # downsampling stride for key and value
+        attn_pdrop=0.0,   # dropout rate for the attention map
+        proj_pdrop=0.0,   # dropout rate for projection op
+        pool_qx_size=2,   # pooling size of the query and input
+        pool_kv_size=2,   # pooling size of the key and value
+        pool_method='avg' # pooling method (avg or max)
+    ):
+        super().__init__()
+        assert n_embd % n_head == 0
+        self.n_embd = n_embd
+        self.n_head = n_head
+        self.n_channels = n_embd // n_head
+        self.scale = 1.0 / math.sqrt(self.n_channels)
+
+        # conv/pooling operations
+        assert (n_qx_stride == 1) or (n_qx_stride % 2 == 0)
+        assert (n_kv_stride == 1) or (n_kv_stride % 2 == 0)
+        self.n_qx_stride = n_qx_stride
+        self.n_kv_stride = n_kv_stride
+
+        # query conv (depthwise)
+        kernel_size = self.n_qx_stride + 1 if self.n_qx_stride > 1 else 3
+        stride, padding = self.n_kv_stride, kernel_size // 2
+        # 1d depthwise conv
+        self.query_conv = MaskedConv1D(
+            self.n_embd, self.n_embd, kernel_size,
+            stride=stride, padding=padding, groups=self.n_embd, bias=False
+        )
+        # layernorm
+        self.query_norm = LayerNorm(self.n_embd)
+
+        # key, value conv (depthwise)
+        kernel_size = self.n_kv_stride + 1 if self.n_kv_stride > 1 else 3
+        stride, padding = self.n_kv_stride, kernel_size // 2
+        # 1d depthwise conv
+        self.key_conv = MaskedConv1D(
+            self.n_embd, self.n_embd, kernel_size,
+            stride=stride, padding=padding, groups=self.n_embd, bias=False
+        )
+        self.key_norm = LayerNorm(self.n_embd)
+        self.value_conv = MaskedConv1D(
+            self.n_embd, self.n_embd, kernel_size,
+            stride=stride, padding=padding, groups=self.n_embd, bias=False
+        )
+        # layernorm
+        self.value_norm = LayerNorm(self.n_embd)
+
+        # key, query, value projections for all heads
+        # it is OK to ignore masking, as the mask will be attached on the attention
+        self.key = nn.Conv1d(self.n_embd, self.n_embd, 1)
+        self.query = nn.Conv1d(self.n_embd, self.n_embd, 1)
+        self.value = nn.Conv1d(self.n_embd, self.n_embd, 1)
+
+        # regularization
+        self.attn_drop = nn.Dropout(attn_pdrop)
+        self.proj_drop = nn.Dropout(proj_pdrop)
+
+        # output projection
+        self.proj = nn.Conv1d(self.n_embd, self.n_embd, 1)
+
+        # pooling
+        if pool_method.lower() == 'avg':
+            self.pool_qx = AvgPooler(pool_qx_size, stride=pool_qx_size)
+            self.pool_kv = AvgPooler(pool_kv_size, stride=pool_kv_size)
+        elif pool_method.lower() == 'max':
+            self.pool_qx = MaxPooler(pool_qx_size, stride=pool_qx_size)
+            self.pool_kv = MaxPooler(pool_kv_size, stride=pool_kv_size)
+
+    def forward(self, x, mask):
+        # x: batch size, feature channel, sequence length,
+        # mask: batch size, 1, sequence length (bool)
+        B, C, T = x.size()
+
+        # query conv -> (B, nh * hs, T')
+        q, qx_mask = self.query_conv(x, mask)
+        q = self.query_norm(q)
+        # key, value conv -> (B, nh * hs, T'')
+        k, kv_mask = self.key_conv(x, mask)
+        k = self.key_norm(k)
+        v, _ = self.value_conv(x, mask)
+        v = self.value_norm(v)
+
+        # projections
+        q = self.query(q)
+        k = self.key(k)
+        v = self.value(v)
+
+        # pooling
+        q, qx_mask = self.pool_qx(q, qx_mask)
+        k, kv_mask = self.pool_kv(k, kv_mask)
+        v, _       = self.pool_kv(v, kv_mask)
+        pooled_x,_ = self.pool_qx(x, mask)
+        
+        # move head forward to be the batch dim
+        # (B, nh * hs, T'/T'') -> (B, nh, T'/T'', hs)
+        k = k.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+        q = q.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+        v = v.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+
+        # self-attention: (B, nh, T', hs) x (B, nh, hs, T'') -> (B, nh, T', T'')
+        att = (q * self.scale) @ k.transpose(-2, -1)
+        # prevent q from attending to invalid tokens
+        att = att.masked_fill(torch.logical_not(kv_mask[:, :, None, :]), float('-inf'))
+        # softmax attn
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        # (B, nh, T', T'') x (B, nh, T'', hs) -> (B, nh, T', hs)
+        out = att @ (v * kv_mask[:, :, :, None].to(v.dtype))
+        # re-assemble all head outputs side by side
+        out = out.transpose(2, 3).contiguous().view(B, C, -1)
+
+        # output projection + skip connection
+        out = self.proj_drop(self.proj(out)) * qx_mask.to(out.dtype) + pooled_x
+        return out, qx_mask
+    
+
 class LocalMaskedMHCA(nn.Module):
     """
     Local Multi Head Conv Attention with mask
@@ -752,6 +877,58 @@ class TransformerBlock(nn.Module):
         return out, out_mask
 
 
+class MulScaleTransformerBlock(TransformerBlock):
+    def __init__(
+        self,
+        n_embd,
+        n_head,
+        n_ds_strides=(1, 1),
+        n_out=None,
+        n_hidden=None,
+        act_layer=nn.GELU,
+        attn_pdrop=0.0,
+        proj_pdrop=0.0,
+        path_pdrop=0.0,
+        mha_win_size=-1,
+        use_rel_pe=False,
+        scale_factor=2,
+        pool_method='avg',
+    ):
+        super().__init__(
+            n_embd, n_head, n_ds_strides, n_out, n_hidden,
+            act_layer, attn_pdrop, proj_pdrop, path_pdrop,
+            mha_win_size, use_rel_pe
+        )
+        # specify the attention module
+        if mha_win_size > 1:
+            raise NotImplementedError
+        else:
+            self.attn = MaskedPoolingMHCA(
+                n_embd,
+                n_head,
+                n_qx_stride=n_ds_strides[0],
+                n_kv_stride=n_ds_strides[1],
+                attn_pdrop=attn_pdrop,
+                proj_pdrop=proj_pdrop,
+                pool_qx_size=scale_factor,
+                pool_kv_size=scale_factor,
+                pool_method=pool_method
+            )
+        
+    def forward(self, x, mask, pos_embd=None):
+        # pre-LN transformer: https://arxiv.org/pdf/2002.04745.pdf
+        out, out_mask = self.attn(self.ln1(x), mask)
+        out_mask_float = out_mask.to(out.dtype)
+        out = self.drop_path_attn(out)
+        # FFN
+        out = out + self.drop_path_mlp(self.mlp(self.ln2(out)) * out_mask_float)
+        # optionally add pos_embd to the output
+        if pos_embd is not None:
+            out += pos_embd * out_mask_float
+        return out, out_mask
+
+
+
 class ConvBlock(nn.Module):
     """
     A simple conv block similar to the basic block used in ResNet
@@ -902,6 +1079,15 @@ class MaxPooler(nn.Module):
 
         return out, out_mask.bool()
 
+class AvgPooler(MaxPooler):
+    def __init__(
+            self,
+            kernel_size,
+            stride,
+            padding=0,):
+        super().__init__(kernel_size, stride, padding)
+        self.ds_pooling = nn.AvgPool1d(
+            kernel_size, stride=stride, padding=padding)
 
 class MaskMambaBlock(nn.Module):
     def __init__(
@@ -1511,3 +1697,39 @@ def multi_head_attention_forward(query,                           # type: Tensor
     else:
         return attn_output, None
 
+class PatchEmbed(nn.Module):
+    """
+    PatchEmbed.
+    """
+    def __init__(
+        self,
+        dim_in=3,
+        dim_out=768,
+        kernel=(1, 16, 16),
+        stride=(1, 4, 4),
+        padding=(1, 7, 7),
+        conv_2d=False,
+    ):
+        super().__init__()
+        if conv_2d:
+            conv = nn.Conv2d
+        else:
+            conv = nn.Conv3d
+        self.proj = conv(
+            dim_in,
+            dim_out,
+            kernel_size=kernel,
+            stride=stride,
+            padding=padding,
+        )
+
+    def forward(self, x, keep_spatial=False):
+        x = self.proj(x)
+
+        if keep_spatial: 
+            return x, x.shape
+        # B C (T) H W -> B (T)HW C
+        return (
+            x.flatten(2).transpose(1, 2),
+            x.shape,
+        )  

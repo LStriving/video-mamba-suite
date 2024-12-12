@@ -18,7 +18,7 @@ from eval2stage import get_best_pth_from_dir
 from libs.core import load_config
 from libs.datasets import make_dataset, make_data_loader
 from libs.modeling import make_meta_arch, make_two_tower
-from libs.utils import (train_one_epoch, valid_one_epoch, infer_one_epoch, ANETdetection,
+from libs.utils import (train_one_epoch, valid_one_epoch, infer_one_epoch, ANETdetection, train_one_epoch_two_loss,
                         save_checkpoint, make_optimizer, make_scheduler, fix_random_seed, ModelEma)
 from train2stage import get_label_dict_from_file
 from libs.datasets.swallow import MultiModalDataset
@@ -42,10 +42,10 @@ def run(cfg, cfg2, args, action_label=None):
     if len(args.output) == 0:
         ts = datetime.datetime.fromtimestamp(int(time.time()))
         ckpt_folder = os.path.join(
-            cfg['output_folder'], cfg_filename + '_' + cfg2_filename + '_' + str(ts))
+            cfg['output_folder'], cfg_filename + '_' + args.tower_name + '_' + cfg2_filename + '_' + str(ts))
     else:
         ckpt_folder = os.path.join(
-            cfg['output_folder'], cfg_filename + '_' + cfg2_filename + '_' + \
+            cfg['output_folder'], cfg_filename + '_' + args.tower_name + '_' + cfg2_filename + '_' + \
                 str(args.output)+'_'+str(cfg['loader']['batch_size'])+'_'+str(cfg['opt']['learning_rate']))
     if not os.path.exists(ckpt_folder):
         os.mkdir(ckpt_folder)
@@ -86,6 +86,8 @@ def run(cfg, cfg2, args, action_label=None):
     model = make_meta_arch(cfg['model_name'], **cfg['model'])
     model2 = make_meta_arch(cfg2['model_name'], **cfg2['model'])
 
+    
+
     """3.5 Initialize (partially) from pre-trained model"""
     if args.backbone_1:
         if os.path.isfile(args.backbone_1):
@@ -124,11 +126,19 @@ def run(cfg, cfg2, args, action_label=None):
     # not ideal for multi GPU training, ok for now
     if not args.cpu:
         model = nn.DataParallel(model, device_ids=cfg['devices'])
+    # # optimizer
+    # optimizer = make_optimizer(model, cfg['opt'])
+    # # schedule
+    # num_iters_per_epoch = len(train_loader)
+    # scheduler = make_scheduler(optimizer, cfg['opt'], num_iters_per_epoch)
     # optimizer
-    optimizer = make_optimizer(model, cfg['opt'])
+    optimizer = make_optimizer(model.module.visual_tower, cfg['opt'])
+    optimizer2 = make_optimizer(model.module.heatmap_tower, cfg2['opt'])
+
     # schedule
     num_iters_per_epoch = len(train_loader)
     scheduler = make_scheduler(optimizer, cfg['opt'], num_iters_per_epoch)
+    scheduler2 = make_scheduler(optimizer2, cfg2['opt'], num_iters_per_epoch)
 
     # enable model EMA
     print("Using model EMA ...")
@@ -208,11 +218,13 @@ def run(cfg, cfg2, args, action_label=None):
 
     for epoch in range(args.start_epoch, max_epochs):
         # train for one epoch
-        train_one_epoch(
+        train_one_epoch_two_loss(
             train_loader,
             model,
             optimizer,
+            optimizer2,
             scheduler,
+            scheduler2,
             epoch,
             model_ema = model_ema,
             clip_grad_l2norm = cfg['train_cfg']['clip_grad_l2norm'],
@@ -300,8 +312,6 @@ def main(args):
     action_label = cfg['dataset']['desired_actions']
     assert set(action_label) == set(cfg2['dataset']['desired_actions']),\
           "Action labels must be the same for two configs!"
-    assert cfg['loader']['batch_size'] == cfg2['loader']['batch_size'],\
-            "Batch size must be the same for two configs!"
     
     if stage == 1:
         assert len(action_label) == 1, "Stage 1 only supports one action label!"

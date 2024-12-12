@@ -25,3 +25,9 @@ if __name__ == '__main__':
     parser.add_argument('--out_feat_root', type=str, required=True)
     args = parser.parse_args()
     concat_feat(args.v_feat_root, args.h_feat_root, args.out_feat_root)
+'''
+python libs/utils/concat_feat.py \
+        --v_feat_root tmp/mulmodal_new \
+        --h_feat_root tmp/heatmap_orirgbi3d \
+        --out_feat_root tmp/3modal
+'''

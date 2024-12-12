@@ -1,5 +1,6 @@
 # python imports
 import argparse
+from functools import partial
 import pickle
 import os, tarfile, io
 import glob
@@ -19,7 +20,9 @@ import torch.utils.data
 from libs.core import load_config
 from libs.datasets import make_dataset, make_data_loader
 from libs.modeling import make_meta_arch
-from libs.utils import infer_one_epoch, ANETdetection, fix_random_seed, valid_one_epoch
+from libs.utils import infer_one_epoch, ANETdetection, fix_random_seed,\
+                    valid_one_epoch, crop_video, VideoKeypointProcessor, slideTensor
+
 
 from pytorch_i3d import InceptionI3d
 
@@ -97,9 +100,15 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
                           ext_score_file=cfg['test_cfg']['ext_score_file'],
                           evaluator=det_eval,
                           output_file=output_file,
-                          print_freq=args.print_freq,
-                          visualize=args.visualize,
+                        #   visualize=args.visualize,
+                        #   print_freq=args.print_freq,
                           )
+    
+    result = remap_action_labels(result, train_label_dict, eval_label_dict)
+    end = time.time()
+    return result
+
+def remap_action_labels(result, train_label_dict, eval_label_dict):
     # check if we need to remap
     remap = False
     if eval_label_dict is not None:
@@ -117,8 +126,6 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
             else:
                 print(f"Warning: {label} not found in eval_label_dict")
         result['label'] -= 1000
-
-    end = time.time()
     return result
 
 def get_label_dict(json_path, desired_actions):
@@ -167,7 +174,7 @@ def main(args):
             cache = pickle.load(f)
         result = cache['result']
         new_feat_center = cache['new_feat_center']
-        new_feat_path = cache['new_feat_path']
+        new_feat_path = args.cache_dir
         new_json_path = cache['new_json_path']
     else:
         result = run(cfg, args, action_label=cfg['dataset']['desired_actions'], infer_or_eval=infer_one_epoch)
@@ -201,8 +208,11 @@ def main(args):
         new_feat_path = args.cache_dir
         os.makedirs(new_feat_path, exist_ok=True)
         cfg['cache_dir'] = args.cache_dir
-        cfg['heatmap'] = args.heatmap
-        cfg['heatmap_dir'] = args.video_root
+        cfg['cropped_videos'] = args.cropped_videos
+        cfg['heatmap_dir'] = args.heatmap_dir
+        cfg['image_size'] = args.image_size
+        cfg['heatmap_size'] = args.heatmap_size
+        cfg['heatmap_branch'] = args.heatmap_branch
         if args.re_extract:
             # get center and extend 
             video_root = args.video_root
@@ -211,7 +221,7 @@ def main(args):
             # extract features
             new_feat_center = extract_features_from_res(video_root, new_feat_path, args.flow_dir, result, cfg)
         else: # much faster but worser performance (drop 10% mAP)
-            CLIP_DUR = 4
+            CLIP_DUR = 4.004
             # get the original feature
             old_feat_root = cfg['dataset']['feat_folder']
             video_rank, cur_video_id = 0, None
@@ -245,7 +255,6 @@ def main(args):
         cache = {
             'result': result,
             'new_feat_center': new_feat_center,
-            'new_feat_path': new_feat_path,
             'new_json_path': new_json_path
         }
         with open(save_cache_path, 'wb') as f:
@@ -326,12 +335,12 @@ def main(args):
             results['t-end'][idx] += center - 2
         # evaluate
         mAP = det_eval.evaluate(results) # should be evaluated on the original video rather than the clipped video
-        print(f"mAP: {mAP}")
+        print(f"mAP: {mAP[0] * 100}")
 
 def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
     # define some constants
-    IMAGE_SIZE = 128
-    CLIP_DUR = 4
+    IMAGE_SIZE, HEATMAP_SIZE = cfg['image_size'], cfg['heatmap_size']
+    CLIP_DUR = 4.004
     WINDOW_SIZE = cfg['dataset']['num_frames']
     WINDOW_STEP = cfg['dataset']['feat_stride']
     # get center and extend 
@@ -340,6 +349,10 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
     flow_data = None
     new_feats = {}
     per_video_rank = 0
+    if cfg['heatmap']:
+        from libs.utils import VideoKeypointProcessor2
+        processor = VideoKeypointProcessor2(cfg['keypoint']['model_path'])
+
     for idx in tqdm(range(len(result['video-id']))):
         video_id = result['video-id'][idx]
         t_center = result['t-center'][idx]
@@ -352,10 +365,10 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
         start_ratio = clip_start / duration
         end_ratio = clip_end / duration
         
-        if cache_video_id != video_id:
-            cache_video_id = video_id
-            per_video_rank = 0
-            if not cfg['heatmap']:
+        if not cfg['cropped_videos']:
+            if cache_video_id != video_id:
+                cache_video_id = video_id
+                per_video_rank = 0
                 video_path = os.path.join(video_root, f"{video_id}.avi")
                 assert os.path.isfile(video_path), "Video file does not exist!"
                 try:
@@ -367,42 +380,86 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                     else:
                         print(e)
                     continue
-                # resize video
-                rgb_data=torch.from_numpy(rgb_data)
-                rgb_data_tmp=torch.zeros(rgb_data.shape[0:1]+(IMAGE_SIZE,IMAGE_SIZE,3)).double()
-                for index,rgb_data in enumerate(rgb_data):
-                    rgb_datum_tmp=torch.from_numpy(cv2.resize(rgb_data.numpy(),(IMAGE_SIZE,IMAGE_SIZE))).double()
-                    rgb_data_tmp[index,:,:,:]=rgb_datum_tmp
-                rgb_data=rgb_data_tmp.view(-1,IMAGE_SIZE,IMAGE_SIZE,3) / 127.5 - 1
+                # extract keypoint
+                if not cfg['heatmap']:
+                    # resize video
+                    rgb_data=torch.from_numpy(rgb_data)
+                    rgb_data_tmp=torch.zeros(rgb_data.shape[0:1]+(IMAGE_SIZE,IMAGE_SIZE,3)).double()
+                    for index,rgb_data in enumerate(rgb_data):
+                        rgb_datum_tmp=torch.from_numpy(cv2.resize(rgb_data.numpy(),(IMAGE_SIZE,IMAGE_SIZE))).double()
+                        rgb_data_tmp[index,:,:,:]=rgb_datum_tmp
+                    rgb_data=rgb_data_tmp.view(-1,IMAGE_SIZE,IMAGE_SIZE,3) / 127.5 - 1
+                    preprocess = None
+                else:
+                    preprocess = partial(extract_keypoints, processor=processor, HEATMAP_SIZE=HEATMAP_SIZE, branch=cfg['heatmap_branch'])
+                
+                if flow_dir is not None:
+                    flow_data=get_flow_frames_from_targz(os.path.join(flow_dir, f"{video_id}.tar.gz"))
+                    flow_data_tmp=torch.zeros(flow_data.shape[0:1]+(IMAGE_SIZE,IMAGE_SIZE,2)).double()
+                    for index,flow_data in enumerate(flow_data):
+                        flow_datum_tmp=torch.from_numpy(cv2.resize(flow_data.numpy(),(IMAGE_SIZE,IMAGE_SIZE))).double()
+                        flow_data_tmp[index,:,:,:]=flow_datum_tmp
+                    flow_data=flow_data_tmp
+                    flow_data=flow_data.view(-1,IMAGE_SIZE,IMAGE_SIZE,2)
             else:
-                heatmap_path = os.path.join(cfg['heatmap_dir'], f"{video_id}.npy")
-                assert os.path.isfile(heatmap_path), f"Heatmap file {heatmap_path} does not exist!"
-                rgb_data = np.load(heatmap_path)
-                rgb_data = torch.from_numpy(rgb_data).unsqueeze(1)
-                rgb_data = torch.nn.functional.interpolate(rgb_data, (IMAGE_SIZE, IMAGE_SIZE), mode='bilinear', align_corners=False)
-                rgb_data = rgb_data.repeat(1, 3, 1, 1)
-                rgb_data = rgb_data.permute(0, 2, 3, 1).double()
-            
-            if flow_dir is not None and not cfg['heatmap']:
-                flow_data=get_flow_frames_from_targz(os.path.join(flow_dir, f"{video_id}.tar.gz"))
-                flow_data_tmp=torch.zeros(flow_data.shape[0:1]+(IMAGE_SIZE,IMAGE_SIZE,2)).double()
-                for index,flow_data in enumerate(flow_data):
-                    flow_datum_tmp=torch.from_numpy(cv2.resize(flow_data.numpy(),(IMAGE_SIZE,IMAGE_SIZE))).double()
-                    flow_data_tmp[index,:,:,:]=flow_datum_tmp
-                flow_data=flow_data_tmp
-                flow_data=flow_data.view(-1,IMAGE_SIZE,IMAGE_SIZE,2)
-        else:
-            per_video_rank += 1
+                per_video_rank += 1
         
+        else:
+            if cache_video_id != video_id:
+                cache_video_id = video_id
+                per_video_rank = 0
+            else:
+                per_video_rank += 1
+            heatmap_path = os.path.join(cfg['heatmap_dir'], 'heatmap', f"{video_id}#{per_video_rank}.npy")
+            if os.path.exists(heatmap_path):    # already extracted heatmap, read from cache
+                rgb_data = np.load(heatmap_path)
+            else: # extract heatmap from video
+                # crop video first
+                video_path = os.path.join(video_root, f"{video_id}.avi")
+                output_path = os.path.join(cfg['heatmap_dir'], 'cropped_video',f"{video_id}#{per_video_rank}.avi")
+                
+                if not os.path.exists(output_path):
+                    crop_video(video_path, output_path, clip_start, clip_end)
+
+                # extract heatmap
+                processor = VideoKeypointProcessor(cfg['keypoint']['model_path'])
+                _, _, cropped_fusion = processor.infer_heatmaps(output_path)
+                # save heatmap
+                os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
+                np.save(heatmap_path, cropped_fusion)
+                # get heatmap
+                rgb_data = cropped_fusion
+
+            rgb_data = torch.from_numpy(rgb_data).unsqueeze(1)
+            rgb_data = torch.nn.functional.interpolate(rgb_data, (HEATMAP_SIZE, HEATMAP_SIZE), mode='bilinear', align_corners=False)
+            rgb_data = rgb_data.repeat(1, 3, 1, 1)
+            rgb_data = rgb_data.permute(0, 2, 3, 1).double()
+
         # slidedata_flow=slideTensor(flow_data,args.chunk_size,args.frequency)
         saved_new_feat_name = video_id + f"#{per_video_rank}"
         new_feat_file = os.path.join(new_feat_path, f"{saved_new_feat_name}.npy")
+        if os.path.isfile(new_feat_file):
+            continue
         # extract features
-        extract_features(rgb_data, flow_data, new_feat_file, start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP)
+        extract_features(rgb_data, flow_data, new_feat_file, 
+            start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP, preprocess=preprocess, cropped=cfg['cropped_videos'], branch=cfg['heatmap_branch'])
         new_feats[saved_new_feat_name] = t_center
         # if len(new_feats) == 2: # debug
         #     build_tmp_json(cfg, new_feats)
     return new_feats
+
+def extract_keypoints(video_data, processor, HEATMAP_SIZE, branch):
+    fusion_data = processor.infer_heatmaps(video_data)[-1]
+    rgb_data = torch.from_numpy(fusion_data).unsqueeze(1)
+    rgb_data = torch.nn.functional.interpolate(rgb_data, (HEATMAP_SIZE, HEATMAP_SIZE), mode='bilinear', align_corners=False)
+    if branch == 'rgb':
+        rgb_data = rgb_data.repeat(1, 3, 1, 1)
+    elif branch == 'flow':
+        rgb_data = rgb_data.repeat(1, 2, 1, 1)
+    else:
+        raise ValueError("Invalid branch value")
+    rgb_data = rgb_data.permute(0, 2, 3, 1).double()
+    return rgb_data
 
 def get_flow_frames_from_targz(tar_dir):
     '''ref to swallow_a2net_vswg/tools/eval.py'''
@@ -426,28 +483,22 @@ def get_flow_frames_from_targz(tar_dir):
     res_tensor=torch.stack([torch.stack(list_u),torch.stack(list_v)],dim=3)
     return res_tensor
 
-def slideTensor(datas,window_size,step):
-    start=0
-    len=datas.shape[0]
-    window_datas=[]
-    while(start<len):
-        if(start+window_size>len-1):
-            break
-        window_datas.append(datas[start:start+window_size,:,:,:])
-        start+=step
-    result=torch.stack(window_datas, 0) # (num_windows, window_size, w, h, c)
-    return result
-
-def extract_features(rgb_data, flow_data, new_feat_file, start_ratio, end_ratio, win_size, win_step):
+def extract_features(rgb_data, flow_data, new_feat_file, start_ratio, end_ratio, win_size, win_step, preprocess=None, cropped=False, branch='rgb'):
     rgb_time_long = rgb_data.shape[0]
+    mode = 'rgb'
     # clip
-    rgb_start_idx = max(0, int(start_ratio * rgb_time_long))
-    rgb_end_idx = min(rgb_time_long, int(end_ratio * rgb_time_long))
-    rgb_data = rgb_data[rgb_start_idx:rgb_end_idx]
+    if not cropped:
+        rgb_start_idx = max(0, int(start_ratio * rgb_time_long))
+        rgb_end_idx = min(rgb_time_long, int(end_ratio * rgb_time_long))
+        rgb_data = rgb_data[rgb_start_idx:rgb_end_idx]
+    if preprocess is not None:
+        rgb_data = preprocess(rgb_data)
+        mode = branch
+
     # slide
     rgb_data = slideTensor(rgb_data, win_size, win_step)
     # get feat
-    feat_spa=get_features(rgb_data,"rgb", batch_size=-1)
+    feat_spa=get_features(rgb_data, mode, batch_size=-1)
     feat_spa=torch.from_numpy(feat_spa)
 
     if flow_data is not None:
@@ -476,10 +527,10 @@ def get_features(data, mode, batch_size=32):
     if batch_size == -1:
         batch_size = data.shape[0]
     batch_loader = torch.utils.data.DataLoader(data, batch_size=batch_size, shuffle=False)
-    if mode == 'flow':
-        i3d = i3d_flow
-    else:
+    if mode == 'rgb':
         i3d = i3d_rgb
+    else:
+        i3d = i3d_flow
     
     all_features = []
     for batch in batch_loader:
@@ -496,13 +547,13 @@ def build_tmp_json(cfg, new_feat_center):
     old_json = cfg['dataset']['json_file']
     with open(old_json, 'r') as f:
         data = json.load(f)
-
+    CLIP_DUR = 4.004
     new_data = {}
     for seg_id, t_center in new_feat_center.items():
         shift = t_center - 2
         video_id = seg_id.split("#")[0]
         new_data[seg_id] = deepcopy(data[video_id])
-        new_data[seg_id]['duration'] = 4.0
+        new_data[seg_id]['duration'] = CLIP_DUR
         new_data[seg_id]['annotations'] = []
         new_data[seg_id]['shift'] = shift
 
@@ -513,7 +564,7 @@ def build_tmp_json(cfg, new_feat_center):
 
             if new_anno['segment'][0] < 0 or new_anno['segment'][1] < 0:
                 continue
-            if new_anno['segment'][0] > 4 or new_anno['segment'][1] > 4:
+            if new_anno['segment'][0] > CLIP_DUR or new_anno['segment'][1] > CLIP_DUR:
                 continue
 
             new_anno.pop("segment(frames)")
@@ -559,7 +610,7 @@ if __name__ == '__main__':
         '--config',
         type=str,
         metavar='DIR',
-        default='./configs/exp/surgery_i3d_rgb_shuffle_w37.yaml',
+        default='configs/2stage/mamba_swallow_i3d_eval_stage1.yaml',
         help='path to a config file for stage 1')
     parser.add_argument('--config2',
                         type=str,
@@ -574,7 +625,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt',
                         type=str,
                         metavar='DIR',
-                        default='ckpt/surgery_i3d_rgb_shuffle_w37_m9216',
+                        default='ckpts/ckpt_swallow/mamba_swallow_i3d_stage1_mamba_swallow_stage1_2_0.0001/epoch_024_0.82621.pth.tar',
                         help='path to a checkpoint')
     parser.add_argument('--epoch',
                         type=int,
@@ -604,10 +655,15 @@ if __name__ == '__main__':
     parser.add_argument('--video_root', type=str, metavar='DIR', default='/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/result/datas', help='path to video root (specific for stage 2)')
     parser.add_argument('--cache_dir', type=str, metavar='DIR', default='./cache', help='path to cache dir for the extracted features (specific for stage 2)')
     parser.add_argument('--flow_dir', type=str, metavar='DIR', default='/mnt/cephfs/home/chenzhuokun/git/swallowProject/result/flow_frames', help='path to flow dir (specific when re-extract)')
-    parser.add_argument("--flow_i3d", type=str, metavar='DIR', default='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/pretrained/flow_imagenet.pt', help='path to flow i3d model')
+    parser.add_argument("--flow_i3d", type=str, metavar='DIR', default='/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt', help='path to flow i3d model')
     parser.add_argument("--rgb_i3d", type=str, metavar='DIR', default='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/pretrained/pretrained_swallow_i3d.pth', help='path to rgb i3d model')
     parser.add_argument("--raise_error", action='store_true', help="raise error when video reading error")
     parser.add_argument("--test_first_stage", action='store_true', help="test first stage on AllTime")
     parser.add_argument("--heatmap", action='store_true', help="use heatmap as input")
+    parser.add_argument("--cropped_videos", action='store_true', help="use cropped videos instead of reading from whole vidoe")
+    parser.add_argument("--heatmap_dir", type=str, metavar='DIR', default='tmp/heatmaps', help='path to heatmap dir')
+    parser.add_argument("--image_size", type=int, default=128, help='image size for heatmap')
+    parser.add_argument("--heatmap_size", type=int, default=224, help='heatmap size for heatmap')
     args = parser.parse_args()
     main(args)
+    # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt

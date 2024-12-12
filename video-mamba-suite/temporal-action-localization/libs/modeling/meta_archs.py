@@ -4,11 +4,11 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .models import register_meta_arch, make_backbone, make_neck, make_generator
+from .models import make_image_stem, make_video_stem, register_meta_arch, make_backbone, make_neck, make_generator
 from .blocks import MaskedConv1D, Scale, LayerNorm
 from .losses import ctr_diou_loss_1d, sigmoid_focal_loss
 
-from ..utils import batched_nms
+from ..utils import batched_nms, slideTensor
 
 
 class PtTransformerClsHead(nn.Module):
@@ -799,3 +799,109 @@ class PtTransformer(nn.Module):
             )
 
         return processed_results
+
+@register_meta_arch("E2Eformer")
+class E2Eformer(PtTransformer):
+    def __init__(self, 
+                 backbone_type, 
+                 fpn_type, 
+                 backbone_arch, 
+                 scale_factor, 
+                 input_dim, 
+                 max_seq_len, 
+                 max_buffer_len_factor, 
+                 n_head, 
+                 n_mha_win_size, 
+                 embd_kernel_size, 
+                 embd_dim, 
+                 embd_with_ln, 
+                 fpn_dim, 
+                 fpn_with_ln, 
+                 head_dim, 
+                 regression_range, 
+                 head_num_layers, 
+                 head_kernel_size, 
+                 head_with_ln, 
+                 use_abs_pe, 
+                 use_rel_pe, 
+                 num_classes, 
+                 train_cfg, 
+                 test_cfg, 
+                 frozen_image_embed,
+                 image_stem,
+                 video_stem,
+                 image_stem_cfg,
+                 video_stem_cfg,
+                 *args, 
+                 **kwargs):
+        super().__init__(backbone_type, fpn_type, backbone_arch, scale_factor, input_dim, 
+                         max_seq_len, max_buffer_len_factor, n_head, n_mha_win_size, 
+                         embd_kernel_size, embd_dim, embd_with_ln, fpn_dim, fpn_with_ln, 
+                         head_dim, regression_range, head_num_layers, head_kernel_size, 
+                         head_with_ln, use_abs_pe, use_rel_pe, num_classes, train_cfg, 
+                         test_cfg, *args, **kwargs)
+        self.input_dim = input_dim
+        # a ResNet50 backbone or MSAttention blocks or None(extracted)
+        ## a lightweight network that enables different input size
+        if image_stem is not None and image_stem != '':
+            self.image_embed = make_image_stem(
+                image_stem,
+                **image_stem_cfg
+            )
+
+        if frozen_image_embed:
+            for param in self.image_embed.parameters():
+                param.requires_grad = False
+
+        # 3D network: an I3D / PoseC3D / STMViT network
+        ## a network that enables different input size
+        self.spatial_or_temporal_net = make_video_stem(
+            video_stem,
+            **video_stem_cfg
+        )
+
+    def forward(self, video_list):
+        # video_list: list of dict items (B)
+        ##  'feat': np.ndarray (C x T x H x W)
+        # input shape: B, C x T(vary) x H x W  (should be resize already)
+        # 2D network: [B, C x T(vary) x H x W] -> [B, T(vary) x C' x H' x W'] or [B, T(vary) x C']
+        ## record T for each video
+        for video in video_list:
+            T = video['feats'].shape[1]
+            video['frame_num'] = T
+        ## convert to (B, t) x C x H x W for batch embedding forward
+        ### transpose C x T (x H x W) to T x C (x H x W)
+        feats = [video['feats'].transpose(0, 1) for video in video_list]
+        feats = torch.cat(feats, dim=0)
+        ### forward the image embedding network
+        if self.image_embed is not None:
+            feats = self.image_embed(feats) #NOTE: may face OOM
+        ## revert back to B, T(vary) x C' (x H' x W')
+        feats = torch.split(feats, [video['frame_num'] for video in video_list], dim=0)
+        # sliding windows: B, T(vary) x C' (x H' x W')-> B, Windows_num(vary) x window_size(8) x C' (x H' x W')
+        slided_feats = []
+        for i, feat in enumerate(feats):
+            slided_feat = slideTensor(feat, window_size=video_list[i]['feat_num_frames'], step=video_list[i]['feat_stride'])
+            slided_feats.append(slided_feat)
+            video_list[i]['t'] = slided_feat.shape[0]
+        # 3D network [B, Windows_num(vary) x window_size(8) x C' x H' x W'] -> B, Windows_num(vary) x C''
+        # or temporal aggregation network [B, Windows_num(vary) x window_size(8) x C'] -> B, Windows_num(vary) x C''
+        slided_feats = torch.cat(slided_feats, dim=0)   #NOTE: may use pad?
+        slided_feats = slided_feats.transpose(1, 2) # B', C ,t
+        slided_feats = self.spatial_or_temporal_net(slided_feats) #NOTE: OOM is possible
+        if isinstance(slided_feats, tuple):
+            slided_feats = slided_feats[0]
+        slided_feats = slided_feats.squeeze(-1) # B', C''
+
+        ## revert back to B, Windows_num(vary) x C'' (C'' should be the same as `input_dim`)
+        slided_feats = torch.split(slided_feats, [video['t'] for video in video_list], dim=0)
+        # update video_list
+        new_video_list = []
+        for i, video in enumerate(video_list):
+            video['feats'] = slided_feats[i].transpose(1, 0) # C'' x T''
+            assert video['feats'].shape[0] == self.input_dim
+            video.pop('frame_num')
+            video.pop('t')
+            new_video_list.append(video)
+        # actionmamba
+        return super().forward(new_video_list)
