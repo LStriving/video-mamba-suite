@@ -139,6 +139,12 @@ DEFAULTS = {
         "include_ori_loss": False,
         "vws": None,
     },
+    "image_stem":{
+
+    },
+    "video_stem":{
+
+    },
 }
 
 def _merge(src, dst):

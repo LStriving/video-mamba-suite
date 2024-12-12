@@ -244,10 +244,15 @@ def main(args):
     if len(heatmap_feats) != len(result['video-id']):
         if args.heatmap_branch == 'rgb':
             args.rgb = args.heatmap_i3d
-        else:
+            initI3ds(args)
+        elif args.heatmap_branch == 'flow':
             args.flow = args.heatmap_i3d
+            initI3ds(args)
+        elif args.heatmap_branch == '' or args.heatmap_branch is None or args.heatmap_branch.lower() == 'none':
+            pass
+        else:
+            raise ValueError(f"Invalid heatmap branch: {args.heatmap_branch}")
         cfg['heatmap_branch'] = args.heatmap_branch
-        initI3ds(args)
         # continue to extract heatmap features
         cfg['cropped_videos'] = args.cropped_videos_heatmap
         cfg['heatmap'] = args.heatmap

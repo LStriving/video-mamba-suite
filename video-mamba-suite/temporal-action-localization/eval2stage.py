@@ -76,7 +76,23 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
         map_location=lambda storage, loc: storage.cuda(cfg['devices'][0]))
     # load ema model instead
     print("Loading from EMA model ...")
-    model.load_state_dict(checkpoint['state_dict_ema'])
+    if args.resnet_ateval:
+        from torchvision.models.resnet import ResNet50_Weights
+        weights = OrderedDict()
+        old_w = checkpoint['state_dict_ema']
+        for k, v in old_w.items():
+            # replace head
+            if k!='module.image_embed.proj.weight' and k!='module.image_embed.proj.bias':
+                weights[k] = v
+            if k == 'module.image_embed.proj.weight':
+                weights['module.image_embed.module.fc.weight'] = v
+            if k == 'module.image_embed.proj.bias':
+                weights['module.image_embed.module.fc.bias'] = v
+        missing_keys, unexpected_keys = model.load_state_dict(weights, strict=False)
+        # assert len(missing_keys) == 0, f"Missing keys: {missing_keys}"
+        assert len(unexpected_keys) == 0, f"Unexpected keys: {unexpected_keys}"
+    else:
+        model.load_state_dict(checkpoint['state_dict_ema'])
     del checkpoint
 
     # set up evaluator
@@ -213,11 +229,13 @@ def main(args):
         cfg['image_size'] = args.image_size
         cfg['heatmap_size'] = args.heatmap_size
         cfg['heatmap_branch'] = args.heatmap_branch
+        cfg['heatmap'] = args.heatmap
         if args.re_extract:
             # get center and extend 
             video_root = args.video_root
             assert os.path.isdir(video_root), "Video root does not exist!"
-            initI3ds(args)
+            if args.heatmap_branch in ['rgb', 'flow']:
+                initI3ds(args)
             # extract features
             new_feat_center = extract_features_from_res(video_root, new_feat_path, args.flow_dir, result, cfg)
         else: # much faster but worser performance (drop 10% mAP)
@@ -404,7 +422,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
             else:
                 per_video_rank += 1
         
-        else:
+        else:#NOTE: cropped videos only support heatmap, which is ok for now
             if cache_video_id != video_id:
                 cache_video_id = video_id
                 per_video_rank = 0
@@ -449,6 +467,10 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
     return new_feats
 
 def extract_keypoints(video_data, processor, HEATMAP_SIZE, branch):
+    '''
+        Please make sure use this function when the video_data is cropped rather than the whole video,
+        otherwise it will lead to worser performance.
+    '''
     fusion_data = processor.infer_heatmaps(video_data)[-1]
     rgb_data = torch.from_numpy(fusion_data).unsqueeze(1)
     rgb_data = torch.nn.functional.interpolate(rgb_data, (HEATMAP_SIZE, HEATMAP_SIZE), mode='bilinear', align_corners=False)
@@ -456,6 +478,8 @@ def extract_keypoints(video_data, processor, HEATMAP_SIZE, branch):
         rgb_data = rgb_data.repeat(1, 3, 1, 1)
     elif branch == 'flow':
         rgb_data = rgb_data.repeat(1, 2, 1, 1)
+    elif branch == 'none' or branch == '' or branch is None:
+        pass
     else:
         raise ValueError("Invalid branch value")
     rgb_data = rgb_data.permute(0, 2, 3, 1).double()
@@ -495,6 +519,10 @@ def extract_features(rgb_data, flow_data, new_feat_file, start_ratio, end_ratio,
         rgb_data = preprocess(rgb_data)
         mode = branch
 
+    if branch is None or branch == '' or branch.lower() == 'none':
+        # do not extract but save only
+        np.save(new_feat_file, rgb_data.squeeze(-1))
+        return rgb_data
     # slide
     rgb_data = slideTensor(rgb_data, win_size, win_step)
     # get feat
@@ -661,9 +689,11 @@ if __name__ == '__main__':
     parser.add_argument("--test_first_stage", action='store_true', help="test first stage on AllTime")
     parser.add_argument("--heatmap", action='store_true', help="use heatmap as input")
     parser.add_argument("--cropped_videos", action='store_true', help="use cropped videos instead of reading from whole vidoe")
-    parser.add_argument("--heatmap_dir", type=str, metavar='DIR', default='tmp/heatmaps', help='path to heatmap dir')
+    parser.add_argument("--heatmap_dir", type=str, metavar='DIR', default='tmp/heatmaps', help='desired save path to heatmap dir, use it when cropped_videos is True')
     parser.add_argument("--image_size", type=int, default=128, help='image size for heatmap')
     parser.add_argument("--heatmap_size", type=int, default=224, help='heatmap size for heatmap')
+    parser.add_argument("--heatmap_branch", type=str, default='rgb', choices=['rgb', 'flow', 'none'], help='i3d branch for heatmap')
+    parser.add_argument("--resnet_ateval", action='store_true', help="probe resnet at eval (extracted resnet feature at train)")
     args = parser.parse_args()
     main(args)
     # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt

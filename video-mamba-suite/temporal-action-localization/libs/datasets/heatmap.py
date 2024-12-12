@@ -36,7 +36,8 @@ class HeatmapRawDataDataset(SwallowDataset):
         resize_to:int=None,  # resize the input features
     ):
         super().__init__(is_training, split, feat_folder, json_file, feat_stride, num_frames, default_fps, downsample_rate, max_seq_len, trunc_thresh, crop_ratio, input_dim, num_classes, file_prefix, file_ext, force_upsampling, feature_type, two_stage, stage_at, desired_actions)
-    
+        self.resize_to = resize_to
+
     def __getitem__(self, index):
         video_item = self.data_list[index]
 
@@ -54,15 +55,18 @@ class HeatmapRawDataDataset(SwallowDataset):
         # resize the features
         if self.resize_to is not None and feats.shape[-1] != self.resize_to:
             feats = torch.from_numpy(feats)
+            assert len(feats.shape) == 3, f"Invalid shape {feats.shape}"
             feats = torch.nn.functional.interpolate(feats, (self.resize_to, self.resize_to), mode='bilinear', align_corners=False).numpy()
         
         # unsqueeze the feats
-        feats = np.expand_dims(feats, axis=0) # C x T x H x W
+        feats = torch.from_numpy(feats).unsqueeze(1)  # T x C x H x W
         
 
         # deal with downsampling (= increased feat stride)
         feats = feats[::self.downsample_rate, :]
         feat_stride = self.feat_stride * self.downsample_rate
+
+        feats = feats.transpose(0, 1).contiguous()  #  C x T x H x W
 
         # convert time stamp (in second) into temporal feature grids
         # ok to have small negative values here

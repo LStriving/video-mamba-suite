@@ -13,6 +13,10 @@ def check_shape(v_dir, h_dir):
 
     for f in tqdm(v_files):
         v_path = os.path.join(v_dir, f)
+        if not os.path.exists(os.path.join(h_dir, f)):
+            inconsist.append(f)
+            print(f"File {f} is not found.")
+            continue
         h_path = os.path.join(h_dir, f)
         v_data = np.load(v_path)
         h_data = np.load(h_path)
