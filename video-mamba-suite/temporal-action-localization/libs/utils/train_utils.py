@@ -68,7 +68,8 @@ def make_optimizer(model, optimizer_config):
     # see https://github.com/karpathy/minGPT/blob/master/mingpt/model.py#L134
     decay = set()
     no_decay = set()
-    whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv1d, MaskedConv1D, torch.nn.Linear, torch.nn.Parameter)
+    whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv1d, MaskedConv1D, 
+                                torch.nn.Linear, torch.nn.Parameter, torch.nn.Conv2d, torch.nn.Conv3d)
     blacklist_weight_modules = (LayerNorm, torch.nn.GroupNorm, nn.LayerNorm)
 
     # loop over all modules / params

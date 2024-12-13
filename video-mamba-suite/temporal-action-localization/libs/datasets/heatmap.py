@@ -56,10 +56,10 @@ class HeatmapRawDataDataset(SwallowDataset):
         if self.resize_to is not None and feats.shape[-1] != self.resize_to:
             feats = torch.from_numpy(feats)
             assert len(feats.shape) == 3, f"Invalid shape {feats.shape}"
-            feats = torch.nn.functional.interpolate(feats, (self.resize_to, self.resize_to), mode='bilinear', align_corners=False).numpy()
-        
-        # unsqueeze the feats
-        feats = torch.from_numpy(feats).unsqueeze(1)  # T x C x H x W
+            feats = torch.nn.functional.interpolate(feats.unsqueeze(1), (self.resize_to, self.resize_to), mode='bilinear', align_corners=False)
+        else:
+            # unsqueeze the feats
+            feats = torch.from_numpy(feats).unsqueeze(1)  # T x C x H x W
         
 
         # deal with downsampling (= increased feat stride)

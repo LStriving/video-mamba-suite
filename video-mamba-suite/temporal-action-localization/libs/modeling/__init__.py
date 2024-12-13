@@ -1,5 +1,6 @@
 from .blocks import (MaskedConv1D, MaskedMHCA, MaskedMHA, LayerNorm,
-                     TransformerBlock, ConvBlock, Scale, AffineDropPath)
+                     TransformerBlock, ConvBlock, Scale, AffineDropPath,
+                     MaskedPoolingMHCAv2, MaskedPoolingMHCA)
 from .models import (make_backbone, make_neck, make_meta_arch, 
                      make_generator, make_two_tower, make_image_stem, make_video_stem)
 from . import backbones      # backbones
@@ -11,6 +12,6 @@ from . import stems          # stem module for e2e training model
 
 __all__ = ['MaskedConv1D', 'MaskedMHCA', 'MaskedMHA', 'LayerNorm'
            'TransformerBlock', 'ConvBlock', 'Scale', 'AffineDropPath',
-           'LocalGlobalTemporalEncoder',  'make_two_tower',
-            'make_image_stem', 'make_video_stem',
+           'LocalGlobalTemporalEncoder',  'make_two_tower', 'MaskedPoolingMHCA',
+            'make_image_stem', 'make_video_stem', 'MaskedPoolingMHCAv2',
            'make_backbone', 'make_neck', 'make_meta_arch', 'make_generator']

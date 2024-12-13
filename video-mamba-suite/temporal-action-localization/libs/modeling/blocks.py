@@ -325,6 +325,7 @@ class MaskedMHCA(nn.Module):
 class MaskedPoolingMHCA(nn.Module):
     """
     MViT-style Multi Head Conv Attention with mask (pooling attention)
+    Reference: http://arxiv.org/abs/2104.11227
     """
     def __init__(
         self,
@@ -446,6 +447,75 @@ class MaskedPoolingMHCA(nn.Module):
         out = self.proj_drop(self.proj(out)) * qx_mask.to(out.dtype) + pooled_x
         return out, qx_mask
     
+
+class MaskedPoolingMHCAv2(MaskedPoolingMHCA):
+    '''
+    Improved MViT-style Pooling Multi Head Conv Attention with mask 
+    Reference: https://arxiv.org/pdf/2112.01526v2
+    '''
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.rel_pe = nn.Parameter(
+                torch.zeros(1, self.n_head, self.n_channels, 1))
+        trunc_normal_(self.rel_pe, std=(2.0 / self.n_embd)**0.5)
+    
+    def forward(self, x, mask):
+        # x: batch size, feature channel, sequence length,
+        # mask: batch size, 1, sequence length (bool)
+        B, C, T = x.size()
+
+        # query conv -> (B, nh * hs, T')
+        q, qx_mask = self.query_conv(x, mask)
+        q = self.query_norm(q)
+        # key, value conv -> (B, nh * hs, T'')
+        k, kv_mask = self.key_conv(x, mask)
+        k = self.key_norm(k)
+        v, _ = self.value_conv(x, mask)
+        v = self.value_norm(v)
+
+        # projections
+        q = self.query(q)
+        k = self.key(k)
+        v = self.value(v)
+
+        # pooling
+        q, qx_mask = self.pool_qx(q, qx_mask)
+        k, kv_mask = self.pool_kv(k, kv_mask)
+        v, _       = self.pool_kv(v, kv_mask)
+        pooled_x,_ = self.pool_qx(x, mask)
+        
+        # move head forward to be the batch dim
+        # (B, nh * hs, T'/T'') -> (B, nh, T'/T'', hs)
+        k = k.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+        q = q.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+        v = v.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+
+        #　> New: add relative positional encoding to pooled_k
+        k = k + self.rel_pe
+
+        # self-attention: (B, nh, T', hs) x (B, nh, hs, T'') -> (B, nh, T', T'')
+        att = (q * self.scale) @ k.transpose(-2, -1)
+        # prevent q from attending to invalid tokens
+        att = att.masked_fill(torch.logical_not(kv_mask[:, :, None, :]), float('-inf'))
+        # softmax attn
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        # (B, nh, T', T'') x (B, nh, T'', hs) -> (B, nh, T', hs)
+        out = att @ (v * kv_mask[:, :, :, None].to(v.dtype))
+
+        # > New: add a skip connection
+        out = out + q
+
+        # re-assemble all head outputs side by side
+        out = out.transpose(2, 3).contiguous().view(B, C, -1)
+
+        # output projection + skip connection
+        out = self.proj_drop(self.proj(out)) * qx_mask.to(out.dtype) + pooled_x
+        return out, qx_mask
 
 class LocalMaskedMHCA(nn.Module):
     """
