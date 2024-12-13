@@ -137,9 +137,18 @@ def run(cfg, cfg2, args, action_label=None):
     """4. Resume from model / Misc"""
     # resume from a checkpoint?
     if args.resume:
+        files = [f for f in os.listdir(ckpt_folder) if f.endswith('.pth.tar')]
+        ckpt_file_list = sorted(files, key=lambda x: int(x.split('.pth')[0].split('_')[1]))
+        ckpt_file = None
+        if len(ckpt_file_list) > 0:
+            ckpt_file = os.path.join(ckpt_folder, ckpt_file_list[-1]) # latest ckpt
+
         if os.path.isfile(args.resume):
+            ckpt_file = args.resume
+
+        if ckpt_file is not None:
             # load ckpt, reset epoch / best rmse
-            checkpoint = torch.load(args.resume,
+            checkpoint = torch.load(ckpt_file,
                 map_location = lambda storage, loc: storage.cuda(
                     cfg['devices'][0]))
             args.start_epoch = checkpoint['epoch'] + 1
@@ -152,9 +161,6 @@ def run(cfg, cfg2, args, action_label=None):
                 args.resume, checkpoint['epoch']
             ))
             del checkpoint
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
-            return
 
     # save the current config
     with open(os.path.join(ckpt_folder, 'config.txt'), 'w') as fid:
