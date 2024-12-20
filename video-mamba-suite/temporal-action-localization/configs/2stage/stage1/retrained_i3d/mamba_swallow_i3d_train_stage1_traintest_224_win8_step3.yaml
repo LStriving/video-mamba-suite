@@ -1,9 +1,9 @@
 dataset_name: swallow
-train_split: ['train']
-val_split: ['validation']
+train_split: ['train'] # should be in lower case!
+val_split: ['test'] # should be in lower case!
 dataset: {
-  json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
-  feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
+  json_file: data/swallow/anno/swallow_singlestage.json,
+  feat_folder: /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/feat/retrainedi3d/resize256_lr01_best/stage1_224/no_interplote,
   file_prefix: ~,
   file_ext: .npy,
   num_classes: 1,
@@ -11,37 +11,34 @@ dataset: {
   feature_type: "",
   # feature_type: "_spatial_feature",
   #2048+768, 1024+768,1280+1024
-  feat_stride: 3,
+  feat_stride: 3,   #TODO: mapping
   num_frames: 8,
   # serve as data augmentation
   trunc_thresh: 0.5,
   crop_ratio: [0.9, 1.0],
-  max_seq_len: 192,
+  max_seq_len: 864,
+  desired_actions: ['AllTime'],
   two_stage: True,
-  stage_at: 2,
-  desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
+  stage_at: 1,
 }
 model: {
   backbone_type: mamba,
   backbone_arch: [2, 2, 4],
-  max_buffer_len_factor: 1.0,
-  # 192 - 96 - 48 - 24 - 12 - 6
-  n_mha_win_size: [25, 25, 25, 25, -1],
   regression_range: [
     [0, 4], [4, 8], [8, 16], [16, 32], [32, 10000]
   ],
   scale_factor: 2,
   fpn_type: identity,
+  max_buffer_len_factor: 6.0,
+  n_mha_win_size: 19,
 }
 opt: {
   learning_rate: 0.0001,
-  epochs: 10,
+  epochs: 45,
   weight_decay: 0.05,
-  warmup: True,
-  warmup_epochs: 5,
 }
 loader: {
-  batch_size: 16,
+  batch_size: 2,
 }
 train_cfg: {
   init_loss_norm: 100,
@@ -65,4 +62,4 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpts/2tower/ckpt_swallow_2tower_10ep/
+output_folder: ./ckpts/link/i3d_rgb224_flow128_retrained1217_win8_step3/

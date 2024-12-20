@@ -3,11 +3,11 @@ train_split: ['train']
 val_split: ['validation']
 dataset: {
   json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
-  feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
+  feat_folder: /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/feat/heatmap20241210/no_interplote,
   file_prefix: ~,
   file_ext: .npy,
   num_classes: 1,
-  input_dim: 2048,
+  input_dim: 1024,
   feature_type: "",
   # feature_type: "_spatial_feature",
   #2048+768, 1024+768,1280+1024
@@ -65,4 +65,4 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpts/2tower/ckpt_swallow_2tower_10ep/
+output_folder: ./ckpts/ckpt_swallow_heatmap_stage2/

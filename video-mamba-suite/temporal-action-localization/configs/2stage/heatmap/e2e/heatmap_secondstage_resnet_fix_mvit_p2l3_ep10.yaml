@@ -1,13 +1,14 @@
-dataset_name: swallow
+dataset_name: swallow # OK to use for e2e training with extracted resnet features for now 
 train_split: ['train']
 val_split: ['validation']
+model_name: E2Eformer
 dataset: {
   json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
-  feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
+  feat_folder: ./data/swallow/stage_2/resnet50_keypointfeat_56,
   file_prefix: ~,
   file_ext: .npy,
   num_classes: 1,
-  input_dim: 2048,
+  input_dim: 1024,
   feature_type: "",
   # feature_type: "_spatial_feature",
   #2048+768, 1024+768,1280+1024
@@ -32,6 +33,9 @@ model: {
   ],
   scale_factor: 2,
   fpn_type: identity,
+  image_stem: projector,
+  video_stem: mvit,
+  frozen_image_embed: False,
 }
 opt: {
   learning_rate: 0.0001,
@@ -65,4 +69,17 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpts/2tower/ckpt_swallow_2tower_10ep/
+image_stem: {
+  in_dim: 2048,
+  out_dim: 1024,
+}
+video_stem: {
+  embed_dim: 1024,
+  num_heads: 4,
+  attn_dropout: 0.0,
+  num_layers: 3,
+  pool_size: 2,
+  pool_mode: avg,
+  act_checkpoint: True,
+}
+output_folder: ./ckpts/e2e_heatmap_stage2/

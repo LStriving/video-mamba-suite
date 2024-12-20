@@ -65,4 +65,7 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpts/2tower/ckpt_swallow_2tower_10ep/
+output_folder: ./ckpts/2tower/fuse_logits0.5/
+two_tower: {
+  vw: 0.5,
+}

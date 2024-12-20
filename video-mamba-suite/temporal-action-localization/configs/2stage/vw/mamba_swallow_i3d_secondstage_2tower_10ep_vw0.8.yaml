@@ -1,6 +1,6 @@
 dataset_name: swallow
-train_split: ['train'] # should be in lower case!
-val_split: ['Validation'] # should be in lower case!
+train_split: ['train']
+val_split: ['validation']
 dataset: {
   json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
   feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
@@ -18,8 +18,8 @@ dataset: {
   crop_ratio: [0.9, 1.0],
   max_seq_len: 192,
   two_stage: True,
-  stage_at: 1,
-  desired_actions: [ThroatSwallow]
+  stage_at: 2,
+  desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
 }
 model: {
   backbone_type: mamba,
@@ -35,11 +35,13 @@ model: {
 }
 opt: {
   learning_rate: 0.0001,
-  epochs: 1,
+  epochs: 10,
   weight_decay: 0.05,
+  warmup: True,
+  warmup_epochs: 5,
 }
 loader: {
-  batch_size: 2,
+  batch_size: 16,
 }
 train_cfg: {
   init_loss_norm: 100,
@@ -63,4 +65,7 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpt_swallow_stage2/
+output_folder: ./ckpts/2tower/fuse_logits0.8/
+two_tower: {
+  vw: 0.8,
+}

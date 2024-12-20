@@ -17,6 +17,7 @@ dataset: {
   trunc_thresh: 0.5,
   crop_ratio: [0.9, 1.0],
   max_seq_len: 864,
+  desired_actions: ['AllTime']
 }
 model: {
   backbone_type: mamba,

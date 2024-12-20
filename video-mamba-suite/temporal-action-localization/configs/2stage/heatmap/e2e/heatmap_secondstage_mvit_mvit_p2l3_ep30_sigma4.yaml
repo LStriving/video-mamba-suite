@@ -1,13 +1,15 @@
-dataset_name: swallow
+dataset_name: heatmap_rawdata
 train_split: ['train']
 val_split: ['validation']
+model_name: E2Eformer
 dataset: {
   json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
-  feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
+  # feat_folder: ./data/swallow/stage_2/resnet50_keypointfeat_56,
+  feat_folder: data/swallow/stage_2/raw_heatmap_sigma4,
   file_prefix: ~,
   file_ext: .npy,
   num_classes: 1,
-  input_dim: 2048,
+  input_dim: 1024,
   feature_type: "",
   # feature_type: "_spatial_feature",
   #2048+768, 1024+768,1280+1024
@@ -20,6 +22,7 @@ dataset: {
   two_stage: True,
   stage_at: 2,
   desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
+  resize_to: 56,
 }
 model: {
   backbone_type: mamba,
@@ -32,10 +35,13 @@ model: {
   ],
   scale_factor: 2,
   fpn_type: identity,
+  image_stem: s-mvit,
+  video_stem: mvit,
+  frozen_image_embed: False,
 }
 opt: {
   learning_rate: 0.0001,
-  epochs: 10,
+  epochs: 30,
   weight_decay: 0.05,
   warmup: True,
   warmup_epochs: 5,
@@ -65,4 +71,28 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpts/2tower/ckpt_swallow_2tower_10ep/
+image_stem: {
+  image_size: 56,
+  patch_size: 7,
+  embed_dim: 1024,
+  in_channels: 1,
+  num_heads: 4,
+  attn_dropout: 0.0,
+  num_layers: 3,
+  pool_size: 4,
+  pool_mode: avg,
+  act_checkpoint: True,
+}
+video_stem: {
+  embed_dim: 1024,
+  num_heads: 4,
+  attn_dropout: 0.0,
+  num_layers: 3,
+  pool_size: 2,
+  pool_mode: avg,
+  act_checkpoint: False,
+}
+keypoint: {
+  sigma: 4,
+}
+output_folder: ./ckpts/link/e2e_heatmap_stage2_mvitNmvit_ep30_sigma4/
