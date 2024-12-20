@@ -9,6 +9,7 @@ from . import loc_generators # location generators
 from . import meta_archs     # full models
 from . import two_tower      # two-tower models
 from . import stems          # stem module for e2e training model
+from . import wrapper
 
 __all__ = ['MaskedConv1D', 'MaskedMHCA', 'MaskedMHA', 'LayerNorm'
            'TransformerBlock', 'ConvBlock', 'Scale', 'AffineDropPath',

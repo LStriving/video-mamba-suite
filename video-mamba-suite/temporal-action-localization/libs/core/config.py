@@ -81,6 +81,10 @@ DEFAULTS = {
         "use_abs_pe": False,
         # use rel position encoding (added to self-attention)
         "use_rel_pe": False,
+        "frozen_image_embed": False,
+        "frozen_video_embed": False,
+        "image_stem_chunk_size": -1,
+        "video_stem_chunk_size": -1,
     },
     "train_cfg": {
         # radius | none (if to use center sampling)
@@ -133,6 +137,7 @@ DEFAULTS = {
     },
     "keypoint":{
         "model_path": "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt",
+        "sigma": 0.6,
     },
     "two_tower":{
         "vw": 0.5,

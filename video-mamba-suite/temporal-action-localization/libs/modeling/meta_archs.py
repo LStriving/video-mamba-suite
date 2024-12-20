@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from .models import make_image_stem, make_video_stem, register_meta_arch, make_backbone, make_neck, make_generator
 from .blocks import MaskedConv1D, Scale, LayerNorm
 from .losses import ctr_diou_loss_1d, sigmoid_focal_loss
+from .wrapper import Wrapper
 
 from ..utils import batched_nms, slideTensor
 
@@ -357,7 +358,7 @@ class PtTransformer(nn.Module):
         # will throw an error if parameters are on different devices
         return list(set(p.device for p in self.parameters()))[0]
 
-    def forward(self, video_list):
+    def logit_forward(self, video_list):
         # batch the video list into feats (B, C, T) and masks (B, 1, T)
         batched_inputs, batched_masks = self.preprocessing(video_list)
 
@@ -384,6 +385,10 @@ class PtTransformer(nn.Module):
         out_offsets = [x.permute(0, 2, 1) for x in out_offsets]
         # fpn_masks: F list[B, 1, T_i] -> F List[B, T_i]
         fpn_masks = [x.squeeze(1) for x in fpn_masks]
+        return out_cls_logits, out_offsets, fpn_masks, points
+
+    def forward(self, video_list):
+        out_cls_logits, out_offsets, fpn_masks, points = self.logit_forward(video_list)
 
         # return loss during training
         if self.training:
@@ -828,10 +833,13 @@ class E2Eformer(PtTransformer):
                  train_cfg, 
                  test_cfg, 
                  frozen_image_embed,
+                 frozen_video_embed,
                  image_stem,
                  video_stem,
                  image_stem_cfg,
                  video_stem_cfg,
+                 image_stem_chunk_size,
+                 video_stem_chunk_size,
                  *args, 
                  **kwargs):
         super().__init__(backbone_type, fpn_type, backbone_arch, scale_factor, input_dim, 
@@ -843,7 +851,9 @@ class E2Eformer(PtTransformer):
         self.input_dim = input_dim
         # a ResNet50 backbone or MSAttention blocks or None(extracted)
         ## a lightweight network that enables different input size
-        if image_stem is not None and image_stem != '':
+        if image_stem is None or image_stem == '' or image_stem.lower() == 'none':
+            self.image_embed = None
+        else:
             self.image_embed = make_image_stem(
                 image_stem,
                 **image_stem_cfg
@@ -859,8 +869,54 @@ class E2Eformer(PtTransformer):
             video_stem,
             **video_stem_cfg
         )
+        
+        if frozen_video_embed:
+            for param in self.spatial_or_temporal_net.parameters():
+                param.requires_grad = False
+
+        # use wrapper to handle the OOM issue
+        if image_stem_chunk_size > 0:
+            self.image_embed = Wrapper(self.image_embed, image_stem_chunk_size)
+        if video_stem_chunk_size > 0:
+            self.spatial_or_temporal_net = Wrapper(self.spatial_or_temporal_net, video_stem_chunk_size)
 
     def forward(self, video_list):
+        out_cls_logits, out_offsets, fpn_masks, points = self.logit_forward(video_list)
+        # return loss during training
+        if self.training:
+            # generate segment/lable List[N x 2] / List[N] with length = B
+            assert video_list[0]['segments'] is not None, "GT action labels does not exist"
+            assert video_list[0]['labels'] is not None, "GT action labels does not exist"
+            # print(video_list)
+            gt_segments = [x['segments'].to(self.device) for x in video_list]
+            gt_labels = [x['labels'].to(self.device) for x in video_list]
+
+            # compute the gt labels for cls & reg
+            # list of prediction targets
+            gt_cls_labels, gt_offsets = self.label_points(
+                points, gt_segments, gt_labels)
+
+            # compute the loss and return
+            losses = self.losses(
+                fpn_masks,
+                out_cls_logits, out_offsets,
+                gt_cls_labels, gt_offsets
+            )
+            return losses
+
+        else:
+            # decode the actions (sigmoid / stride, etc)
+            results = self.inference(
+                video_list, points, fpn_masks,
+                out_cls_logits, out_offsets
+            )
+            return results
+
+    def logit_forward(self, video_list):
+        video_list = self.pre_forward(video_list)
+        return super().logit_forward(video_list)
+
+    def pre_forward(self, video_list):
         # video_list: list of dict items (B)
         ##  'feat': np.ndarray (C x T x H x W)
         # input shape: B, C x T(vary) x H x W  (should be resize already)
@@ -872,12 +928,12 @@ class E2Eformer(PtTransformer):
         ## convert to (B, t) x C x H x W for batch embedding forward
         ### transpose C x T (x H x W) to T x C (x H x W)
         feats = [video['feats'].transpose(0, 1) for video in video_list]
-        feats = torch.cat(feats, dim=0)
-        ### forward the image embedding network
         if self.image_embed is not None:
+            feats = torch.cat(feats, dim=0)
+            ### forward the image embedding network
             feats = self.image_embed(feats) #NOTE: may face OOM
-        ## revert back to B, T(vary) x C' (x H' x W')
-        feats = torch.split(feats, [video['frame_num'] for video in video_list], dim=0)
+            ## revert back to B, T(vary) x C' (x H' x W')
+            feats = torch.split(feats, [video['frame_num'] for video in video_list], dim=0)
         # sliding windows: B, T(vary) x C' (x H' x W')-> B, Windows_num(vary) x window_size(8) x C' (x H' x W')
         slided_feats = []
         for i, feat in enumerate(feats):
@@ -886,7 +942,7 @@ class E2Eformer(PtTransformer):
             video_list[i]['t'] = slided_feat.shape[0]
         # 3D network [B, Windows_num(vary) x window_size(8) x C' x H' x W'] -> B, Windows_num(vary) x C''
         # or temporal aggregation network [B, Windows_num(vary) x window_size(8) x C'] -> B, Windows_num(vary) x C''
-        slided_feats = torch.cat(slided_feats, dim=0)   #NOTE: may use pad?
+        slided_feats = torch.cat(slided_feats, dim=0)
         slided_feats = slided_feats.transpose(1, 2) # B', C ,t
         slided_feats = self.spatial_or_temporal_net(slided_feats) #NOTE: OOM is possible
         if isinstance(slided_feats, tuple):
@@ -903,5 +959,4 @@ class E2Eformer(PtTransformer):
             video.pop('frame_num')
             video.pop('t')
             new_video_list.append(video)
-        # actionmamba
-        return super().forward(new_video_list)
+        return new_video_list

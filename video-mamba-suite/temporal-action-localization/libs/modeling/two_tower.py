@@ -171,41 +171,12 @@ class LogitAvg(TwoTower):
         losses['final_loss'] += h_losses['final_loss']
         return losses
 
-    def old_forward(self, module, video_list):
-        # batch the video list into feats (B, C, T) and masks (B, 1, T)
-        batched_inputs, batched_masks = module.preprocessing(video_list)
-
-        # forward the network (backbone -> neck -> heads)
-        feats, masks = module.backbone(batched_inputs, batched_masks)
-        fpn_feats, fpn_masks = module.neck(feats, masks)
-        # fpn_feats [16, 256, 768] ..[16, 256, 384]..[16, 256, 24]
-
-        # compute the point coordinate along the FPN
-        # this is used for computing the GT or decode the final results
-        # points: List[T x 4] with length = # fpn levels
-        # (shared across all samples in the mini-batch)
-        points = module.point_generator(fpn_feats)
-
-        # out_cls: List[B, #cls + 1, T_i]
-        out_cls_logits = module.cls_head(fpn_feats, fpn_masks)
-        # out_offset: List[B, 2, T_i]
-        out_offsets = module.reg_head(fpn_feats, fpn_masks)
-
-        # permute the outputs
-        # out_cls: F List[B, #cls, T_i] -> F List[B, T_i, #cls]
-        out_cls_logits = [x.permute(0, 2, 1) for x in out_cls_logits]
-        # out_offset: F List[B, 2 (xC), T_i] -> F List[B, T_i, 2 (xC)]
-        out_offsets = [x.permute(0, 2, 1) for x in out_offsets]
-        # fpn_masks: F list[B, 1, T_i] -> F List[B, T_i]
-        fpn_masks = [x.squeeze(1) for x in fpn_masks]
-        return out_cls_logits, out_offsets, fpn_masks, points
-
     def inference_forward(self, video_list, heatmap_list):
         self.visual_tower.training = False
         self.heatmap_tower.training = False
         # fuse logits and offsets
-        v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points = self.old_forward(self.visual_tower, video_list)
-        h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points = self.old_forward(self.heatmap_tower, heatmap_list)
+        v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points = self.visual_tower.logit_forward(video_list)
+        h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points = self.heatmap_tower.logit_forward(heatmap_list)
         #NOTE: may need to check, but okay for now
         out_cls_logits = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_cls_logits, h_out_cls_logits)] 
         out_offsets = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_offsets, h_out_offsets)]
@@ -225,7 +196,7 @@ class LogitAvg_sepbranch(LogitAvg):
         h_losses = self.heatmap_tower(heatmap_list)
         return v_losses, h_losses
 
-# TODO:
+# TODO: Implement LogitsAvg_List or just remove it
 @register_two_tower('LogitsAvg_List')
 class LogitAvg_List(TwoTower):
     def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vws=np.linspace(0.,1.,num=11), *args, **kwargs):

@@ -1,5 +1,6 @@
 import math
-
+import os
+from collections import OrderedDict
 import torch
 import torch.nn as nn
 from torchvision.models import resnet50
@@ -194,13 +195,28 @@ class Inception3D(nn.Module):
         self,
         in_channels: int,
         dropout_prob: float,
+        pretrained: str,
+        act_checkpoint: bool,
         **kwargs
     ):
         super().__init__()
-        self.i3d = InceptionI3d(in_channels=in_channels, dropout_keep_prob=dropout_prob, **kwargs)
+        self.i3d = InceptionI3d(num_classes=7, in_channels=in_channels, dropout_keep_prob=dropout_prob, **kwargs)
+        self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
+        self.i3d = self.wrapper(self.i3d)
+        if pretrained:
+            self._init_from_pretrained(pretrained)
+
+    def _init_from_pretrained(self, pretrained):
+        os.path.exists(pretrained), f"Pretrained model {pretrained} does not exist."
+        ckpt = torch.load(pretrained)['state_dict']
+        new_ckpt = OrderedDict()
+        for k, v in ckpt.items():
+            new_ckpt[k.replace('module.', '')] = v
+        self.i3d.load_state_dict(new_ckpt)
+        print(f"I3D: Load pretrained model from {pretrained}")
 
     def forward(self, x):
-        return self.i3d.extract_features(x)
+        return self.i3d.extract_features(x)[:,:,0,0,0]
 
 @register_image_stem('posec3d')
 class PoseC3D(nn.Module):

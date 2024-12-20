@@ -1,4 +1,6 @@
-import os
+import os, tarfile
+import io
+import pickle
 import json
 from pprint import pprint
 import numpy as np
@@ -6,14 +8,13 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.nn import functional as F
+import mmengine
+import skvideo.io
+from PIL import Image
 
 from .datasets import register_dataset
 from .data_utils import truncate_feats
-import mmengine
 
-import pickle
-
-import io
 
 @register_dataset("swallow")
 class SwallowDataset(Dataset):
@@ -39,6 +40,7 @@ class SwallowDataset(Dataset):
         two_stage=False, # two stage training
         stage_at=0,      # stage to start training
         desired_actions=None, # desired action label names
+        **kwargs
     ):
         # file path
         # # assert os.path.exists(feat_folder) and os.path.exists(json_file)
@@ -251,6 +253,281 @@ class SwallowDataset(Dataset):
 
         return data_dict
 
+
+@register_dataset("swallow-rawvideo-rgb")
+class SwallowRawVideoRGBDataset(SwallowDataset):
+    '''
+    Load raw video data from disk (only RGB frames)
+    '''
+    def __init__(self,
+        is_training,     # if in training mode
+        split,           # split, a tuple/list allowing concat of subsets
+        feat_folder,     # folder for features
+        json_file,       # json file for annotations
+        feat_stride,     # temporal stride of the feats
+        num_frames,      # number of frames for each feat
+        default_fps,     # default fps
+        downsample_rate, # downsample rate for feats
+        max_seq_len,     # maximum sequence length during training
+        trunc_thresh,    # threshold for truncate an action segment
+        crop_ratio,      # a tuple (e.g., (0.9, 1.0)) for random cropping
+        input_dim,       # input feat dim
+        num_classes,     # number of action categories
+        file_prefix,     # feature file prefix if any
+        file_ext,        # feature file extension if any
+        force_upsampling, # force to upsample to max_seq_len
+        feature_type="",
+        two_stage=False, # two stage training
+        stage_at=0,      # stage to start training
+        desired_actions=None, # desired action label names
+        resize_to:int=None,  # resize the input features
+        center_crop:bool=False, # center crop the input features
+    ):
+        super().__init__(
+                is_training=is_training,     # if in training mode
+                split=split,           # split, a tuple/list allowing concat of subsets
+                feat_folder=feat_folder,     # folder for features
+                json_file=json_file,       # json file for annotations
+                feat_stride=feat_stride,     # temporal stride of the feats
+                num_frames=num_frames,      # number of frames for each feat
+                default_fps=default_fps,     # default fps
+                downsample_rate=downsample_rate, # downsample rate for feats
+                max_seq_len=max_seq_len,     # maximum sequence length during training
+                trunc_thresh=trunc_thresh,    # threshold for truncate an action segment
+                crop_ratio=crop_ratio,      # a tuple (e.g., (0.9, 1.0)) for random cropping
+                input_dim=input_dim,       # input feat dim
+                num_classes=num_classes,     # number of action categories
+                file_prefix=file_prefix,     # feature file prefix if any
+                file_ext=file_ext,        # feature file extension if any
+                force_upsampling=force_upsampling, # force to upsample to max_seq_len
+                feature_type=feature_type,
+                two_stage=two_stage, # two stage training
+                stage_at=stage_at,      # stage to start training
+                desired_actions=desired_actions, # desired action label names
+        )
+        self.resize_to = resize_to
+        self.center_crop = center_crop
+    
+    def centercrop_resize_video(self, feats, size=(128, 128)):
+        if size[0] == 224:
+            resized_len = 226
+        elif size[0] == 128:
+            resized_len = 130
+        else:
+            raise ValueError(f"Unsupported size {size}.")
+        # feats: C x T x H x W
+        # resize to large size first
+        h, w = feats.shape[-2:]
+        if h < resized_len or w < resized_len:
+            d = resized_len - min(h, w)
+            sc = 1 + d / min(h, w)
+            feats = F.interpolate(feats, scale_factor=sc, mode='bilinear', align_corners=False)
+        # center crop the input features
+        i = int(np.round((h - size[0]) / 2.))
+        j = int(np.round((w - size[1]) / 2.))
+        feats = feats[:,:,i:i+size[0],j:j+size[1]]
+        return feats
+
+    def __getitem__(self, idx):
+        video_item = self.data_list[idx]
+
+        filename = os.path.join(self.feat_folder, self.file_prefix + video_item['id'] +self.feature_type + self.file_ext)
+        assert os.path.exists(filename), f"File {filename} does not exist"
+        try:
+            data = skvideo.io.vread(filename)
+        except Exception as e:
+            print(f"Error reading {filename}")
+            raise e
+        
+        feats = torch.from_numpy(data).permute(3,0,1,2).float() # C x T x H x W
+
+        if self.resize_to is not None and self.resize_to != feats.shape[-1]: # recommend to resize first
+            if self.center_crop:
+                feats = self.centercrop_resize_video(feats, size=(self.resize_to, self.resize_to))
+            else:
+                feats = F.interpolate(feats, size=(self.resize_to, self.resize_to), mode='bilinear', align_corners=False)
+
+        # normalize the video
+        feats = feats / 127.5 - 1.0
+        # downsample the video
+        feats = feats[:,::self.downsample_rate,...]
+        feat_stride = self.feat_stride * self.downsample_rate
+
+        # convert time stamp (in second) into temporal feature grids
+        # ok to have small negative values here
+        if video_item['segments'] is not None:
+            segments = torch.from_numpy(
+                (video_item['segments'] * video_item['fps'] - 0.5 * self.num_frames) / feat_stride
+            )
+            labels = torch.from_numpy(video_item['labels'])
+        else:
+            segments, labels = None, None 
+
+        # return a data dict
+        data_dict = {'video_id'        : video_item['id'],
+                     'feats'           : feats,      # C x T x H x W
+                     'segments'        : segments,   # N x 2
+                     'labels'          : labels,     # N
+                     'fps'             : video_item['fps'],
+                     'duration'        : video_item['duration'],
+                     'feat_stride'     : feat_stride,
+                     'feat_num_frames' : self.num_frames}
+        
+        # truncate the features during training
+        if self.is_training and (segments is not None):
+            max_seq_len = self.max_seq_len * feat_stride + self.num_frames
+            data_dict = truncate_feats(
+                data_dict, max_seq_len, self.trunc_thresh, self.crop_ratio
+            )
+        
+        return data_dict
+
+
+@register_dataset("swallow-rawvideo")
+class SwallowRawVideoDataset(SwallowDataset):
+    '''
+    Load raw video data from disk (RGB and Flow)
+    '''
+    def __init__(self,
+        is_training,     # if in training mode
+        split,           # split, a tuple/list allowing concat of subsets
+        feat_folder,     # folder for videos
+        flow_folder,     # folder for flow features
+        json_file,       # json file for annotations
+        feat_stride,     # temporal stride of the feats
+        num_frames,      # number of frames for each feat
+        default_fps,     # default fps
+        downsample_rate, # downsample rate for feats
+        max_seq_len,     # maximum sequence length during training
+        trunc_thresh,    # threshold for truncate an action segment
+        crop_ratio,      # a tuple (e.g., (0.9, 1.0)) for random cropping
+        input_dim,       # input feat dim
+        num_classes,     # number of action categories
+        file_prefix,     # feature file prefix if any
+        file_ext,        # feature file extension if any
+        force_upsampling, # force to upsample to max_seq_len
+        feature_type="",
+        two_stage=False, # two stage training
+        stage_at=0,      # stage to start training
+        desired_actions=None, # desired action label names
+        resize_to:int=None,  # resize the input features
+    ):
+        super().__init__(
+                self,
+                is_training,     # if in training mode
+                split,           # split, a tuple/list allowing concat of subsets
+                feat_folder,     # folder for videos
+                json_file,       # json file for annotations
+                feat_stride,     # temporal stride of the feats
+                num_frames,      # number of frames for each feat
+                default_fps,     # default fps
+                downsample_rate, # downsample rate for feats
+                max_seq_len,     # maximum sequence length during training
+                trunc_thresh,    # threshold for truncate an action segment
+                crop_ratio,      # a tuple (e.g., (0.9, 1.0)) for random cropping
+                input_dim,       # input feat dim
+                num_classes,     # number of action categories
+                file_prefix,     # feature file prefix if any
+                file_ext,        # feature file extension if any
+                force_upsampling, # force to upsample to max_seq_len
+                feature_type,    # feature type (not used in this class)
+                two_stage,       # two stage training
+                stage_at,        # stage to start training
+                desired_actions, # desired action label names
+        )
+        self.resize_to = resize_to
+        self.flow_folder = flow_folder
+        assert os.path.exists(self.flow_folder), f"Flow folder {self.flow_folder} does not exist"
+
+    @staticmethod
+    def get_flow_frames_from_targz(self, tar_dir):
+        '''
+        refer to https://ieeexplore.ieee.org/document/10244004/?arnumber=10244004
+        '''
+        list_u=[]
+        list_v=[]
+        with tarfile.open(tar_dir) as tar:
+            mems=sorted(tar.getmembers(),key=lambda x:x.path)
+            for x in mems:
+                if(x.size==0):
+                    continue
+                filelikeobject=tar.extractfile(x)
+                r=filelikeobject.read()
+                bytes_stream = io.BytesIO(r)
+                roiimg=Image.open(bytes_stream)
+                nparr=np.array(roiimg,dtype=np.float)
+                norm_data=nparr/127.5-1
+                if(x.path.split("/")[1]=="u"):
+                    list_u.append(torch.tensor(norm_data))
+                else:
+                    list_v.append(torch.tensor(norm_data))
+        res_tensor=torch.stack([torch.stack(list_u),torch.stack(list_v)],dim=3)
+        return res_tensor
+
+
+    def __getitem__(self, idx):
+        video_item = self.data_list[idx]
+
+        filename = os.path.join(self.feat_folder, self.file_prefix + video_item['id'] +self.feature_type + self.file_ext)
+        assert os.path.exists(filename), f"File {filename} does not exist"
+        try:
+            data = skvideo.io.vread(filename)
+        except Exception as e:
+            print(f"RGB Video Error reading {filename}")
+            raise e
+        
+        flow_filename = os.path.join(self.flow_folder, self.file_prefix + video_item['id'] +self.feature_type + '.tar.gz')
+        assert os.path.exists(flow_filename), f"File {flow_filename} does not exist"
+        try:
+            flow_data = self.get_flow_frames_from_targz(flow_filename) # torch (T x H x W x 2)
+        except Exception as e:
+            print(f"Flow Video Error reading {flow_filename}")
+            raise e
+        flow_data = flow_data.permute(3,0,1,2).float() # 2 x T x H x W
+        if self.resize_to is not None and self.resize_to != flow_data.shape[-1]:
+            flow_data = F.interpolate(flow_data, size=(self.resize_to, self.resize_to), mode='bilinear', align_corners=False)
+
+        feats = torch.from_numpy(data).permute(3,0,1,2).float() # C x T x H x W
+        if self.resize_to is not None and self.resize_to != feats.shape[-1]:
+            feats = F.interpolate(feats, size=(self.resize_to, self.resize_to), mode='bilinear', align_corners=False)
+
+        # normalize the video
+        feats = feats / 255.0
+        # concat the RGB and Flow features on the channel dimension
+        feats = torch.cat([feats, flow_data], dim=0)
+
+        # downsample the video
+        feats = feats[:,::self.downsample_rate,...]
+        feat_stride = self.feat_stride * self.downsample_rate
+
+        # convert time stamp (in second) into temporal feature grids
+        # ok to have small negative values here
+        if video_item['segments'] is not None:
+            segments = torch.from_numpy(
+                (video_item['segments'] * video_item['fps'] - 0.5 * self.num_frames) / feat_stride
+            )
+            labels = torch.from_numpy(video_item['labels'])
+        else:
+            segments, labels = None, None 
+
+        # return a data dict
+        data_dict = {'video_id'        : video_item['id'],
+                     'feats'           : feats,      # C x T x H x W
+                     'segments'        : segments,   # N x 2
+                     'labels'          : labels,     # N
+                     'fps'             : video_item['fps'],
+                     'duration'        : video_item['duration'],
+                     'feat_stride'     : feat_stride,
+                     'feat_num_frames' : self.num_frames}
+        
+        # truncate the features during training
+        if self.is_training and (segments is not None):
+            max_seq_len = self.max_seq_len * feat_stride + self.num_frames
+            data_dict = truncate_feats(
+                data_dict, max_seq_len, self.trunc_thresh, self.crop_ratio
+            )
+        
+        return data_dict
 
 @register_dataset("two-modal")
 class MultiModalDataset(Dataset):
