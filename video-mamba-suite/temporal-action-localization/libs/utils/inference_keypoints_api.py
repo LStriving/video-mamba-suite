@@ -216,7 +216,7 @@ def generate_a_limb_heatmap(arr, starts, ends, start_values, end_values, sigma =
             d2_ab = ((start[0] - end[0])**2 + (start[1] - end[1])**2)
 
             if d2_ab < 1:
-                generate_a_heatmap(arr, start[None], start_value[None])
+                generate_a_heatmap(arr, start[None], start_value[None],sigma=sigma)
                 continue
 
             coeff = (d2_start - d2_end + d2_ab) / 2. / d2_ab
@@ -238,11 +238,12 @@ def generate_a_limb_heatmap(arr, starts, ends, start_values, end_values, sigma =
 
 
 class VideoKeypointProcessor:
-    def __init__(self, model_path, image_width=192, image_height=256, batch_size=32, num_workers=4):
+    def __init__(self, model_path, image_width=192, image_height=256, batch_size=32, num_workers=4, sigma=0.6):
         self.image_width = image_width
         self.image_height = image_height
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.sigma = sigma
 
         # Load model
         self.model = torch.jit.load(model_path).cuda()
@@ -346,8 +347,8 @@ class VideoKeypointProcessor:
             confidence = confidences[i]
             start_values = confidence[self.skeleton[:,0]]
             end_values = confidence[self.skeleton[:,1]]
-            generate_a_heatmap(arr_keypoint,keypoint,confidence)
-            generate_a_limb_heatmap(arr_edge,starts,ends,start_values,end_values)
+            generate_a_heatmap(arr_keypoint,keypoint,confidence,sigma=self.sigma)
+            generate_a_limb_heatmap(arr_edge,starts,ends,start_values,end_values,sigma=self.sigma)
         
         # 使用 np.nonzero 找到非零元素的索引
         non_zero_indices = np.nonzero(arrs_keypoint)
