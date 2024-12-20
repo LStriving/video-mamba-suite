@@ -168,8 +168,8 @@ def main(args):
             else:
                 result[key] = result[key][mask]
         if len(set(result['video-id'])) < len(eval_dataset):
-            print(f"Warning: length of stage 1 is smaller than the dataset, \
-                {len(result['video-id'])} vs {len(eval_dataset)}. Try to decrease confidence threshold.")
+            print(f"Warning: length of stage 1 is smaller than the dataset,\
+                {len(set(result['video-id']))} vs {len(eval_dataset)}. Try to decrease confidence threshold.")
 
         if args.test_first_stage:
             # after filtering, we have a new result
