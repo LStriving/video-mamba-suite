@@ -157,8 +157,8 @@ def run(cfg, cfg2, args, action_label=None):
             # also load the optimizer / scheduler if necessary
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
-            print("=> loaded checkpoint '{:s}' (epoch {:d}".format(
-                args.resume, checkpoint['epoch']
+            print("=> loaded checkpoint '{:s}' (epoch {:d})".format(
+                ckpt_file, checkpoint['epoch']
             ))
             del checkpoint
 
