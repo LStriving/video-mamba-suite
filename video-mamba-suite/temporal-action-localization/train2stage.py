@@ -107,8 +107,8 @@ def run(cfg, args, action_label=None):
             # also load the optimizer / scheduler if necessary
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
-            print("=> loaded checkpoint '{:s}' (epoch {:d}".format(
-                args.resume, checkpoint['epoch']
+            print("=> loaded checkpoint '{:s}' (epoch {:d})".format(
+                ckpt_file, checkpoint['epoch']
             ))
             del checkpoint
         
@@ -260,27 +260,34 @@ def main(args):
     if stage == 1:
         assert len(action_label) == 1, "Stage 1 only supports one action label!"
 
-    if cfg['dataset']['num_classes'] == 1:
+    output = args.output
+    if cfg['dataset']['num_classes'] == 1 and stage == 2:
         # looping over all actions
-        output = args.output
-
         set_start_method('spawn', force=True)
         processes = []
         for rank, action in enumerate(action_label):
-            p = Process(target=train_action, args=(cfg, args, output, action,rank))
+            p = Process(target=train_action, args=(cfg, args, output, action, rank))
             p.start()
             processes.append(p)
         
         for p in processes:
             p.join()
-    else:
+    elif stage == 2:
+        run(cfg, args, action_label)
+    else: # stage 1
+        action = action_label[0]
+        output_prefix = f'{action}_'
+        args.output = f'{output_prefix}{output}'
+        cfg['dataset']['desired_actions'] = [action]
         run(cfg, args, action_label)
 
 def train_action(cfg, args, output, action, rank):
+    num_gpus = torch.cuda.device_count()
+    print(f"Training action: {action} on GPU {rank}")
     output_prefix = f'{action}_'
     args.output = f'{output_prefix}{output}'
     cfg['dataset']['desired_actions'] = [action]
-    cfg['devices'] = [f'cuda:{rank}']
+    cfg['devices'] = [f'cuda:{rank}'] if rank < num_gpus else [f'cuda:{rank % num_gpus}']
     run(cfg, args, action)
 
 def get_label_dict_from_file(json_file, action_label):
