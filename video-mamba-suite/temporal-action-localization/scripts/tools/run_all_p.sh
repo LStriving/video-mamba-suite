@@ -18,7 +18,7 @@ do
         --cache_dir tmp/threshold$i \
         --re-extract \
         --confidence $i \
-        --test_first_stage > outputs/diff_threshold/$i.txt
+        --test_first_stage > outputs/diff_threshold/$i.log
     iter=$((iter+1))
 done
 wait  # 等待所有后台进程完成
