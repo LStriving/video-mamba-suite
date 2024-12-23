@@ -361,7 +361,9 @@ class PtTransformer(nn.Module):
     def logit_forward(self, video_list):
         # batch the video list into feats (B, C, T) and masks (B, 1, T)
         batched_inputs, batched_masks = self.preprocessing(video_list)
+        return self._logit_processed_input_forward(batched_inputs, batched_masks)
 
+    def _logit_processed_input_forward(self, batched_inputs, batched_masks):
         # forward the network (backbone -> neck -> heads)
         feats, masks = self.backbone(batched_inputs, batched_masks)
         fpn_feats, fpn_masks = self.neck(feats, masks)
@@ -387,31 +389,34 @@ class PtTransformer(nn.Module):
         fpn_masks = [x.squeeze(1) for x in fpn_masks]
         return out_cls_logits, out_offsets, fpn_masks, points
 
+    def train_forward(self, video_list, out_cls_logits, out_offsets, fpn_masks, points):
+        # generate segment/lable List[N x 2] / List[N] with length = B
+        assert video_list[0]['segments'] is not None, "GT action labels does not exist"
+        assert video_list[0]['labels'] is not None, "GT action labels does not exist"
+        # print(video_list)
+        gt_segments = [x['segments'].to(self.device) for x in video_list]
+        gt_labels = [x['labels'].to(self.device) for x in video_list]
+
+        # compute the gt labels for cls & reg
+        # list of prediction targets
+        gt_cls_labels, gt_offsets = self.label_points(
+            points, gt_segments, gt_labels)
+
+        # compute the loss and return
+        losses = self.losses(
+            fpn_masks,
+            out_cls_logits, out_offsets,
+            gt_cls_labels, gt_offsets
+        )
+        return losses
+
     def forward(self, video_list):
         out_cls_logits, out_offsets, fpn_masks, points = self.logit_forward(video_list)
 
         # return loss during training
         if self.training:
-            # generate segment/lable List[N x 2] / List[N] with length = B
-            assert video_list[0]['segments'] is not None, "GT action labels does not exist"
-            assert video_list[0]['labels'] is not None, "GT action labels does not exist"
-            # print(video_list)
-            gt_segments = [x['segments'].to(self.device) for x in video_list]
-            gt_labels = [x['labels'].to(self.device) for x in video_list]
-
-            # compute the gt labels for cls & reg
-            # list of prediction targets
-            gt_cls_labels, gt_offsets = self.label_points(
-                points, gt_segments, gt_labels)
-
-            # compute the loss and return
-            losses = self.losses(
-                fpn_masks,
-                out_cls_logits, out_offsets,
-                gt_cls_labels, gt_offsets
-            )
-            return losses
-
+            return self.train_forward(video_list, out_cls_logits, 
+                                      out_offsets, fpn_masks, points)
         else:
             # decode the actions (sigmoid / stride, etc)
             results = self.inference(

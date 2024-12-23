@@ -1,9 +1,11 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from fairscale.nn.checkpoint import checkpoint_wrapper
 
 from .meta_archs import PtTransformerClsHead, PtTransformerRegHead
 from .models import register_two_tower, make_neck
+from .blocks import PostNormCrossTransformerBlock, PreNormCrossTransformerBlock
 
 
 class TwoTower(nn.Module):
@@ -273,25 +275,107 @@ class LogitAvg_List(TwoTower):
 
 @register_two_tower('CrossAttnEarlyFusion')
 class CrossAttnEarlyFusion(TwoTower):
-    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, include_ori_loss=True, *args, **kwargs):
+    """
+    Add cross attention module for both visual and heatmap towers
+    The module is added before the (actionmamba or actionformer) backbone
+    """
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
         super().__init__(visual_tower, heatmap_tower, cfg1, cfg2)
-        self.v2h = ...
-        self.h2v = ...
+        self.vw = vw
+        self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
+        self.num_layers = num_layers
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"CrossAttnEarlyFusion: vw={vw}, num_layers={num_layers}")
+        print(f"v_input_dim={v_input_dim}, h_input_dim={h_input_dim}")
+
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PostNormCrossTransformerBlock(
+                v_input_dim,
+                h_input_dim,
+                cfg1['model']['n_head'],
+            )) for _ in range(num_layers)]
+        )
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PostNormCrossTransformerBlock(
+                h_input_dim,
+                v_input_dim,
+                cfg2['model']['n_head'],
+            )) for _ in range(num_layers)]
+        )
 
     def forward(self, input):
         video_list = [i[0] for i in input]
         heatmap_list = [i[1] for i in input]
+        v_out, h_out = self.fused_logit_foward(video_list, heatmap_list)
         if self.training:
-            # cross attention module here
-
-
-            # forward the visual tower
-            v_losses = self.visual_tower(video_list)
-            h_losses = self.heatmap_tower(heatmap_list)
+            v_losses = self.visual_tower.train_forward(video_list, *v_out)
+            h_losses = self.heatmap_tower.train_forward(heatmap_list, *h_out)
             losses = v_losses
             losses['final_loss'] += h_losses['final_loss']
             return losses
         else:
             self.visual_tower.training = False
             self.heatmap_tower.training = False
-            ...
+            v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points = v_out
+            h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points = h_out
+            # fuse logits and offsets
+            out_cls_logits = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_cls_logits, h_out_cls_logits)]
+            out_offsets = [(1 - self.vw) * h + self.vw * v for v, h in zip(v_out_offsets, h_out_offsets)]
+            return self.visual_tower.inference(
+                video_list, v_points, v_fpn_masks,
+                out_cls_logits, out_offsets
+            )
+
+    def fused_logit_foward(self, video_list, heatmap_list):
+        if getattr(self.visual_tower, 'pre_forward', None):
+            video_list = self.visual_tower.pre_forward(video_list)
+        if getattr(self.heatmap_tower, 'pre_forward', None):
+            heatmap_list = self.heatmap_tower.pre_forward(heatmap_list)
+        batched_v_inputs, batched_v_masks = self.visual_tower.preprocessing(video_list)
+        batched_h_inputs, batched_h_masks = self.heatmap_tower.preprocessing(heatmap_list)
+
+        # cross attention module here 
+        for i in range(self.num_layers):    # TODO: need to re-check when layer > 1
+            original_v_inputs, original_v_masks = batched_v_inputs, batched_v_masks
+            # (query: visual, key/value: heatmap)
+            batched_v_inputs, batched_v_masks = self.h2v[i](query=batched_v_inputs, key=batched_h_inputs.detach(), value=batched_h_inputs.detach(), 
+                                                            query_mask=batched_v_masks, kv_mask=batched_h_masks)
+            # (query: heatmap, key/value: visual)
+            batched_h_inputs, batched_h_masks = self.v2h[i](query=batched_h_inputs, key=original_v_inputs.detach(), value=original_v_inputs.detach(), 
+                                                            query_mask=original_v_masks, kv_mask=original_v_masks)
+        
+        # forward the network (backbone -> neck -> heads)
+        v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points \
+            = self.visual_tower._logit_processed_input_forward(batched_v_inputs, batched_v_masks)
+        h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points \
+            = self.heatmap_tower._logit_processed_input_forward(batched_h_inputs, batched_h_masks)
+        
+        return (v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points), \
+                (h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points)
+    
+@register_two_tower('CrossAttnEarlyFusion-PreNorm')
+class CrossAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2, vw, num_layers, act_checkpoint)
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"CrossAttnEarlyFusion-PreNorm: vw={vw}, num_layers={num_layers}")
+        print(f"v_input_dim={v_input_dim}, h_input_dim={h_input_dim}")
+
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PreNormCrossTransformerBlock(
+                v_input_dim,
+                h_input_dim,
+                cfg1['model']['n_head'],
+                pre_norm=True
+            )) for _ in range(num_layers)]
+        )
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PreNormCrossTransformerBlock(
+                h_input_dim,
+                v_input_dim,
+                cfg2['model']['n_head'],
+                pre_norm=True
+            )) for _ in range(num_layers)]
+        )

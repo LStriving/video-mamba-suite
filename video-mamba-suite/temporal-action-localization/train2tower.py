@@ -119,7 +119,7 @@ def run(cfg, cfg2, args, action_label=None):
 
 
     # two-tower model
-    model = make_two_tower(args.tower_name, model, model2, cfg, cfg, **cfg['two_tower'])
+    model = make_two_tower(args.tower_name, model, model2, cfg, cfg2, **cfg['two_tower'])
 
     # not ideal for multi GPU training, ok for now
     if not args.cpu:

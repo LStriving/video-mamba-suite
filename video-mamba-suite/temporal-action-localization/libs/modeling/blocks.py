@@ -322,6 +322,127 @@ class MaskedMHCA(nn.Module):
         return out, qx_mask
 
 
+class MaskedMHCCA(nn.Module):
+    """
+    Multi Head Conv Cross Attention with mask (PostNorm)
+
+    Add a depthwise convolution within a standard MHA
+    The extra conv op can be used to
+    (1) encode relative position information (relacing position encoding);
+    (2) downsample the features if needed;
+    (3) match the feature channels
+
+    Note: With current implementation, the downsampled feature will be aligned
+    to every s+1 time step, where s is the downsampling stride. This allows us
+    to easily interpolate the corresponding positional embeddings.
+
+    Modified from https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
+    """
+
+    def __init__(
+        self,
+        n_embd,          # dimension of the output/query features
+        kv_dim,          # dimension of the key/value features
+        n_head,          # number of heads in multi-head self-attention
+        n_qx_stride=1,   # dowsampling stride for query and input
+        n_kv_stride=1,   # downsampling stride for key and value
+        attn_pdrop=0.0,  # dropout rate for the attention map
+        proj_pdrop=0.0,  # dropout rate for projection op
+    ):
+        super().__init__()
+        assert n_embd % n_head == 0
+        assert kv_dim % n_head == 0
+        self.n_embd = n_embd
+        self.kv_dim = kv_dim
+        self.n_head = n_head
+        self.n_channels = n_embd // n_head
+        self.scale = 1.0 / math.sqrt(self.n_channels)
+
+        # conv/pooling operations
+        assert (n_qx_stride == 1) or (n_qx_stride % 2 == 0)
+        assert (n_kv_stride == 1) or (n_kv_stride % 2 == 0)
+        self.n_qx_stride = n_qx_stride
+        self.n_kv_stride = n_kv_stride
+
+        # query conv (depthwise)
+        kernel_size = self.n_qx_stride + 1 if self.n_qx_stride > 1 else 3
+        stride, padding = self.n_kv_stride, kernel_size // 2
+        # 1d depthwise conv
+        self.query_conv = MaskedConv1D(
+            self.n_embd, self.n_embd, kernel_size,
+            stride=stride, padding=padding, groups=self.n_embd, bias=False
+        )
+        # layernorm
+        self.query_norm = LayerNorm(self.n_embd)
+
+        # key, value conv (depthwise)
+        kernel_size = self.n_kv_stride + 1 if self.n_kv_stride > 1 else 3
+        stride, padding = self.n_kv_stride, kernel_size // 2
+        # 1d depthwise conv
+        self.key_conv = MaskedConv1D(
+            self.kv_dim, self.kv_dim, kernel_size,
+            stride=stride, padding=padding, groups=self.kv_dim, bias=False
+        )
+        self.key_norm = LayerNorm(self.kv_dim)
+        self.value_conv = MaskedConv1D(
+            self.kv_dim, self.kv_dim, kernel_size,
+            stride=stride, padding=padding, groups=self.kv_dim, bias=False
+        )
+        # layernorm
+        self.value_norm = LayerNorm(self.kv_dim)
+
+        # key, query, value projections for all heads
+        # it is OK to ignore masking, as the mask will be attached on the attention
+        self.query = nn.Conv1d(self.n_embd, self.n_embd, 1)
+        self.key = nn.Conv1d(self.kv_dim, self.n_embd, 1)
+        self.value = nn.Conv1d(self.kv_dim, self.n_embd, 1)
+
+        # regularization
+        self.attn_drop = nn.Dropout(attn_pdrop)
+        self.proj_drop = nn.Dropout(proj_pdrop)
+
+        # output projection
+        self.proj = nn.Conv1d(self.n_embd, self.n_embd, 1)
+
+    def forward(self, query, key, value, q_mask, kv_mask):
+        # x: batch size, feature channel, sequence length,
+        # mask: batch size, 1, sequence length (bool)
+        B, C, T = query.size()
+        # B, D, T = key.size()
+
+        # query conv -> (B, nh * hs, T')
+        q, qx_mask = self.query_conv(query, q_mask)
+        # key, value conv -> (B, nh * hs, T'')
+        k, kv_mask = self.key_conv(key, kv_mask)
+        v, _ = self.value_conv(value, kv_mask)
+
+        # projections
+        q = self.query(q)
+        k = self.key(k)
+        v = self.value(v)
+
+        # move head forward to be the batch dim
+        # (B, nh * hs, T'/T'') -> (B, nh, T'/T'', hs)
+        q = q.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+        k = k.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+        v = v.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
+
+        # self-attention: (B, nh, T', hs) x (B, nh, hs, T'') -> (B, nh, T', T'')
+        att = (q * self.scale) @ k.transpose(-2, -1)
+        # prevent q from attending to invalid tokens
+        att = att.masked_fill(torch.logical_not(kv_mask[:, :, None, :]), float('-inf'))
+        # softmax attn
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        # (B, nh, T', T'') x (B, nh, T'', hs) -> (B, nh, T', hs)
+        out = att @ (v * kv_mask[:, :, :, None].to(v.dtype))
+        # re-assemble all head outputs side by side
+        out = out.transpose(2, 3).contiguous().view(B, C, -1)
+
+        # output projection + skip connection
+        out = self.proj_drop(self.proj(out)) * qx_mask.to(out.dtype)
+        return out, qx_mask
+
 class MaskedPoolingMHCA(nn.Module):
     """
     MViT-style Multi Head Conv Attention with mask (pooling attention)
@@ -459,9 +580,10 @@ class MaskedPoolingMHCAv2(MaskedPoolingMHCA):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.rel_pe = nn.Parameter(
-                torch.zeros(1, self.n_head, self.n_channels, 1))
-        trunc_normal_(self.rel_pe, std=(2.0 / self.n_embd)**0.5)
+        # self.num_patches = 
+        # self.rel_pe = nn.Parameter(
+        #         torch.zeros(1, self.n_head, self., self.n_channels)) # TODO: check the dimension
+        # trunc_normal_(self.rel_pe, std=(2.0 / self.n_embd)**0.5)
     
     def forward(self, x, mask):
         # x: batch size, feature channel, sequence length,
@@ -494,8 +616,10 @@ class MaskedPoolingMHCAv2(MaskedPoolingMHCA):
         q = q.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
         v = v.view(B, self.n_head, self.n_channels, -1).transpose(2, 3)
 
-        #　> New: add relative positional encoding to pooled_k
-        k = k + self.rel_pe
+        # print('k ', k.shape, 'pe ', self.rel_pe.shape)
+        # breakpoint()
+        # #　> New: add relative positional encoding to pooled_k
+        # k = k + self.rel_pe
 
         # self-attention: (B, nh, T', hs) x (B, nh, hs, T'') -> (B, nh, T', T'')
         att = (q * self.scale) @ k.transpose(-2, -1)
@@ -945,6 +1069,188 @@ class TransformerBlock(nn.Module):
         if pos_embd is not None:
             out += pos_embd * out_mask_float
         return out, out_mask
+
+class PostNormCrossTransformerBlock(nn.Module):
+    def __init__(
+        self,
+        n_embd,                # dimension of the input features
+        kv_embd,               # dimension of the key and value features
+        n_head,                # number of attention heads
+        n_ds_strides=(1, 1),   # downsampling strides for q & x, k & v
+        n_out=None,            # output dimension, if None, set to input dim
+        n_hidden=None,         # dimension of the hidden layer in MLP
+        act_layer=nn.GELU,     # nonlinear activation used in MLP, default GELU
+        attn_pdrop=0.0,        # dropout rate for the attention map
+        proj_pdrop=0.0,        # dropout rate for the projection / MLP
+        path_pdrop=0.0,        # drop path rate
+        mha_win_size=-1,       # > 0 to use window mha
+        use_rel_pe=False       # if to add rel position encoding to attention
+    ):
+        super().__init__()
+        assert len(n_ds_strides) == 2
+        # layer norm for order (B C T)
+        self.ln1 = LayerNorm(n_embd)
+        self.ln2 = LayerNorm(n_embd)
+
+        # specify the attention module
+        if mha_win_size > 1:
+            # self.attn = LocalMaskedMHCA(
+            #     n_embd,
+            #     n_head,
+            #     window_size=mha_win_size,
+            #     n_qx_stride=n_ds_strides[0],
+            #     n_kv_stride=n_ds_strides[1],
+            #     attn_pdrop=attn_pdrop,
+            #     proj_pdrop=proj_pdrop,
+            #     use_rel_pe=use_rel_pe  # only valid for local attention
+            # )
+            raise NotImplementedError
+        else:
+            self.attn = MaskedMHCCA(
+                n_embd,
+                kv_embd,
+                n_head,
+                n_qx_stride=n_ds_strides[0],
+                n_kv_stride=n_ds_strides[1],
+                attn_pdrop=attn_pdrop,
+                proj_pdrop=proj_pdrop
+            )
+
+        # input
+        if n_ds_strides[0] > 1:
+            kernel_size, stride, padding = \
+                n_ds_strides[0] + 1, n_ds_strides[0], (n_ds_strides[0] + 1)//2
+            self.pool_skip = nn.MaxPool1d(
+                kernel_size, stride=stride, padding=padding)
+        else:
+            self.pool_skip = nn.Identity()
+
+        # two layer mlp
+        if n_hidden is None:
+            n_hidden = 4 * n_embd  # default
+        if n_out is None:
+            n_out = n_embd
+        # ok to use conv1d here with stride=1
+        self.mlp = nn.Sequential(
+            nn.Conv1d(n_embd, n_hidden, 1),
+            act_layer(),
+            nn.Dropout(proj_pdrop, inplace=True),
+            nn.Conv1d(n_hidden, n_out, 1),
+            nn.Dropout(proj_pdrop, inplace=True),
+        )
+
+        # drop path
+        if path_pdrop > 0.0:
+            self.drop_path_attn = AffineDropPath(n_embd, drop_prob = path_pdrop)
+            self.drop_path_mlp = AffineDropPath(n_out, drop_prob = path_pdrop)
+        else:
+            self.drop_path_attn = nn.Identity()
+            self.drop_path_mlp = nn.Identity()
+
+    def forward(self, query, key, value, query_mask, kv_mask, pos_embd=None):
+        # post-LN transformer: https://arxiv.org/pdf/2002.04745.pdf
+        out, out_mask = self.attn(query, key, value, query_mask, kv_mask)
+        out_mask_float = out_mask.to(out.dtype)
+        out = self.pool_skip(query) * out_mask_float + self.drop_path_attn(out)
+        out = self.ln1(out)
+        # FFN
+        out = out + self.drop_path_mlp(self.mlp(out) * out_mask_float)
+        out = self.ln2(out)
+        # optionally add pos_embd to the output
+        if pos_embd is not None:
+            out += pos_embd * out_mask_float
+        return out, out_mask
+
+class PreNormCrossTransformerBlock(nn.Module):
+    def __init__(
+        self,
+        n_embd,                # dimension of the input features
+        kv_embd,               # dimension of the key and value features
+        n_head,                # number of attention heads
+        n_ds_strides=(1, 1),   # downsampling strides for q & x, k & v
+        n_out=None,            # output dimension, if None, set to input dim
+        n_hidden=None,         # dimension of the hidden layer in MLP
+        act_layer=nn.GELU,     # nonlinear activation used in MLP, default GELU
+        attn_pdrop=0.0,        # dropout rate for the attention map
+        proj_pdrop=0.0,        # dropout rate for the projection / MLP
+        path_pdrop=0.0,        # drop path rate
+        mha_win_size=-1,       # > 0 to use window mha
+        use_rel_pe=False       # if to add rel position encoding to attention
+    ):
+        super().__init__()
+        assert len(n_ds_strides) == 2
+        # layer norm for order (B C T)
+        self.ln1 = LayerNorm(n_embd)
+        self.ln2 = LayerNorm(n_embd)
+        self.ln3 = LayerNorm(kv_embd)
+
+        # specify the attention module
+        if mha_win_size > 1:
+            # self.attn = LocalMaskedMHCA(
+            #     n_embd,
+            #     n_head,
+            #     window_size=mha_win_size,
+            #     n_qx_stride=n_ds_strides[0],
+            #     n_kv_stride=n_ds_strides[1],
+            #     attn_pdrop=attn_pdrop,
+            #     proj_pdrop=proj_pdrop,
+            #     use_rel_pe=use_rel_pe  # only valid for local attention
+            # )
+            raise NotImplementedError
+        else:
+            self.attn = MaskedMHCCA(
+                n_embd,
+                kv_embd,
+                n_head,
+                n_qx_stride=n_ds_strides[0],
+                n_kv_stride=n_ds_strides[1],
+                attn_pdrop=attn_pdrop,
+                proj_pdrop=proj_pdrop
+            )
+
+        # input
+        if n_ds_strides[0] > 1:
+            kernel_size, stride, padding = \
+                n_ds_strides[0] + 1, n_ds_strides[0], (n_ds_strides[0] + 1)//2
+            self.pool_skip = nn.MaxPool1d(
+                kernel_size, stride=stride, padding=padding)
+        else:
+            self.pool_skip = nn.Identity()
+
+        # two layer mlp
+        if n_hidden is None:
+            n_hidden = 4 * n_embd  # default
+        if n_out is None:
+            n_out = n_embd
+        # ok to use conv1d here with stride=1
+        self.mlp = nn.Sequential(
+            nn.Conv1d(n_embd, n_hidden, 1),
+            act_layer(),
+            nn.Dropout(proj_pdrop, inplace=True),
+            nn.Conv1d(n_hidden, n_out, 1),
+            nn.Dropout(proj_pdrop, inplace=True),
+        )
+
+        # drop path
+        if path_pdrop > 0.0:
+            self.drop_path_attn = AffineDropPath(n_embd, drop_prob = path_pdrop)
+            self.drop_path_mlp = AffineDropPath(n_out, drop_prob = path_pdrop)
+        else:
+            self.drop_path_attn = nn.Identity()
+            self.drop_path_mlp = nn.Identity()
+
+    def forward(self, query, key, value, query_mask, kv_mask, pos_embd=None):
+        # pre-LN transformer: https://arxiv.org/pdf/2002.04745.pdf
+        out, out_mask = self.attn(self.ln1(query), self.ln3(key), self.ln3(value), query_mask, kv_mask)
+        out_mask_float = out_mask.to(out.dtype)
+        out = self.pool_skip(query) * out_mask_float + self.drop_path_attn(out)
+        # FFN
+        out = out + self.drop_path_mlp(self.mlp(self.ln2(out)) * out_mask_float)
+        # optionally add pos_embd to the output
+        if pos_embd is not None:
+            out += pos_embd * out_mask_float
+        return out, out_mask
+
 
 
 class MulScaleTransformerBlock(TransformerBlock):

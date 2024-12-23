@@ -76,7 +76,7 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
         map_location=lambda storage, loc: storage.cuda(cfg['devices'][0]))
     # load ema model instead
     print("Loading from EMA model ...")
-    if args.resnet_ateval:
+    if getattr(args, 'resnet_ateval', False):
         from torchvision.models.resnet import ResNet50_Weights
         weights = OrderedDict()
         old_w = checkpoint['state_dict_ema']
@@ -163,6 +163,49 @@ def get_label_dict(json_path, desired_actions):
 ################################################################################
 def main(args):
     ### Stage 1
+    cfg, eval_dataset, eval_db_vars, new_feat_path, new_feat_center, new_json_path = stage1infer_extractFeature(args)
+
+    ### Stage 2
+    if args.config2:
+        stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path, new_json_path)
+    
+    if args.config2 and args.infer_perfect_stage1:
+        # if cache exists, load it
+        save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + "_perfect.pkl"
+        save_cache_path = os.path.join(args.perfect_stage1, save_cache_name)
+        if os.path.isfile(save_cache_path):
+            print(f"Loading cache from {save_cache_path}")
+            with open(save_cache_path, 'rb') as f:
+                cache = pickle.load(f)
+            perfect_result = cache['result']
+            perfect_feat_center = cache['new_feat_center']
+            perfect_json_path = cache['new_json_path']
+        else:
+            # re-extract features
+            # do not support crop features
+            # extract features for perfect stage 1
+            cfg['cache_dir'] = args.perfect_stage1
+            os.makedirs(args.perfect_stage1, exist_ok=True)
+            perfect_result = build_perfect_stage1_results(eval_dataset.json_file, cfg['val_split'])
+            if args.heatmap_branch in ['rgb', 'flow'] or not args.heatmap:
+                initI3ds(args)
+            perfect_feat_center = extract_features_from_res(args.video_root, args.perfect_stage1, args.flow_dir, perfect_result, cfg)
+            perfect_json_path = build_tmp_json(cfg, perfect_feat_center)
+            cfg['cache_dir'] = args.cache_dir
+
+            # save cache
+            cache = {}
+            cache['result'] = perfect_result
+            cache['new_feat_center'] = perfect_feat_center
+            cache['new_json_path'] = perfect_json_path
+            with open(save_cache_path, 'wb') as f:
+                pickle.dump(cache, f)
+        
+        perfect_json_path = build_tmp_json(cfg, perfect_feat_center)
+        print("Evaluating based on perfect stage 1 ...")
+        stage2eval(args, eval_dataset, eval_db_vars, perfect_feat_center, args.perfect_stage1, perfect_json_path)
+
+def stage1infer_extractFeature(args):
     """0. load config"""
     # sanity check
     if os.path.isfile(args.config):
@@ -243,34 +286,7 @@ def main(args):
             # extract features
             new_feat_center = extract_features_from_res(video_root, new_feat_path, args.flow_dir, result, cfg)
         else: # much faster but worser performance (drop 10% mAP)
-            print("Warning: Clipping features rather than re-extracting from videos, this will lead to worser performance.")
-            CLIP_DUR = cfg['seg_duration']
-            # get the original feature
-            old_feat_root = cfg['dataset']['feat_folder']
-            video_rank, cur_video_id = 0, None
-            new_feat_center = {}
-            for idx, res in tqdm(enumerate(result['video-id'])):
-                feat_path = os.path.join(old_feat_root, f"{res}.npy")
-                assert os.path.isfile(feat_path), "Feature file does not exist!"
-                if cur_video_id != res:
-                    cur_video_id = res
-                    video_rank = 0
-                video_rank += 1
-                seg_id = f'{res}#{video_rank}'
-                crop_feat_path = os.path.join(new_feat_path, f"{seg_id}.npy")
-                data = np.load(feat_path)
-                duration = int(res.split("_")[-1])
-                clip_start = result['t-center'][idx] - CLIP_DUR / 2
-                clip_end = result['t-center'][idx] + CLIP_DUR / 2
-                clip_start = max(clip_start, 0)
-                clip_end = min(clip_end, duration)
-                start_ratio = clip_start / duration
-                end_ratio = clip_end / duration
-                start_idx = int(start_ratio * data.shape[0])
-                end_idx = int(end_ratio * data.shape[0])
-                new_data = data[start_idx:end_idx]
-                np.save(crop_feat_path, new_data)
-                new_feat_center[seg_id] = result['t-center'][idx]
+            new_feat_center = crop_features_from_res(cfg, new_feat_path, result)
             
         # build new json file for stage 2 dataset
         new_json_path = build_tmp_json(cfg, new_feat_center)
@@ -288,48 +304,39 @@ def main(args):
         # after filtering, we have a new result
         print('filtering results with threshold: ', args.confidence) 
         mAP = det_eval_stage1.evaluate(result)
+    return cfg,eval_dataset,eval_db_vars,new_feat_path,new_feat_center,new_json_path
 
-    ### Stage 2
-    if args.config2:
-        stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path, new_json_path)
-    
-    if args.config2 and args.infer_perfect_stage1:
-        # if cache exists, load it
-        save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + "_perfect.pkl"
-        save_cache_path = os.path.join(args.perfect_stage1, save_cache_name)
-        if os.path.isfile(save_cache_path):
-            print(f"Loading cache from {save_cache_path}")
-            with open(save_cache_path, 'rb') as f:
-                cache = pickle.load(f)
-            perfect_result = cache['result']
-            perfect_feat_center = cache['new_feat_center']
-            perfect_json_path = cache['new_json_path']
-        else:
-            # re-extract features
-            # do not support crop features
-            # extract features for perfect stage 1
-            cfg['cache_dir'] = args.perfect_stage1
-            os.makedirs(args.perfect_stage1, exist_ok=True)
-            perfect_result = build_perfect_stage1_results(eval_dataset.json_file, cfg['val_split'])
-            if args.heatmap_branch in ['rgb', 'flow'] or not args.heatmap:
-                initI3ds(args)
-            perfect_feat_center = extract_features_from_res(args.video_root, args.perfect_stage1, args.flow_dir, perfect_result, cfg)
-            perfect_json_path = build_tmp_json(cfg, perfect_feat_center)
-            cfg['cache_dir'] = args.cache_dir
 
-            # save cache
-            cache = {}
-            cache['result'] = perfect_result
-            cache['new_feat_center'] = perfect_feat_center
-            cache['new_json_path'] = perfect_json_path
-            with open(save_cache_path, 'wb') as f:
-                pickle.dump(cache, f)
-        
-
-        if args.infer_perfect_stage1:
-            perfect_json_path = build_tmp_json(cfg, perfect_feat_center)
-        print("Evaluating based on perfect stage 1 ...")
-        stage2eval(args, eval_dataset, eval_db_vars, perfect_feat_center, args.perfect_stage1, perfect_json_path)
+def crop_features_from_res(cfg, new_feat_path, result):
+    print("Warning: Clipping features rather than re-extracting from videos, this will lead to worser performance.")
+    CLIP_DUR = cfg['seg_duration']
+            # get the original feature
+    old_feat_root = cfg['dataset']['feat_folder']
+    video_rank, cur_video_id = 0, None
+    new_feat_center = {}
+    for idx, res in tqdm(enumerate(result['video-id'])):
+        feat_path = os.path.join(old_feat_root, f"{res}.npy")
+        assert os.path.isfile(feat_path), "Feature file does not exist!"
+        if cur_video_id != res:
+            cur_video_id = res
+            video_rank = 0
+        video_rank += 1
+        seg_id = f'{res}#{video_rank}'
+        crop_feat_path = os.path.join(new_feat_path, f"{seg_id}.npy")
+        data = np.load(feat_path)
+        duration = int(res.split("_")[-1])
+        clip_start = result['t-center'][idx] - CLIP_DUR / 2
+        clip_end = result['t-center'][idx] + CLIP_DUR / 2
+        clip_start = max(clip_start, 0)
+        clip_end = min(clip_end, duration)
+        start_ratio = clip_start / duration
+        end_ratio = clip_end / duration
+        start_idx = int(start_ratio * data.shape[0])
+        end_idx = int(end_ratio * data.shape[0])
+        new_data = data[start_idx:end_idx]
+        np.save(crop_feat_path, new_data)
+        new_feat_center[seg_id] = result['t-center'][idx]
+    return new_feat_center
 
 def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path, new_json_path):
     results = {
@@ -360,19 +367,7 @@ def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path,
     label_dict = get_label_dict(eval_dataset.json_file, cfg['dataset']['desired_actions'])
     if cfg['dataset']['num_classes'] == 1:  # single classification
         for action in cfg['dataset']['desired_actions']:
-            action_id = label_dict[action]
-            # search action ckpt dir
-            action_ckpt_dirs = os.listdir(args.ckpt2)
-            action_ckpt_dirs = [ckpt_dir for ckpt_dir in action_ckpt_dirs if action in ckpt_dir]
-            if len(action_ckpt_dirs) > 1:
-                print(f"Warning: Multiple ckpt dirs found for action {action}, using the first one.")
-            elif len(action_ckpt_dirs) == 0:
-                print(f"Error: No ckpt dir found for action {action}.")
-                raise FileNotFoundError
-            action_ckpt_dir = os.path.join(args.ckpt2, action_ckpt_dirs[0])
-            args.ckpt = get_best_pth_from_dir(action_ckpt_dir)
-            print(f"Using ckpt: {args.ckpt}")
-            cfg['dataset']['desired_actions'] = [action]
+            action_id = single_cls_map(args, cfg, label_dict, action)
             result = run(cfg, args, action_label=action, infer_or_eval=infer_one_epoch)
 
             # gather results (numpy) from different actions
@@ -395,13 +390,7 @@ def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path,
         results['seg-id'] = results['video-id']
         results['video-id'] = [i.split("#")[0] for i in results['video-id']]
     # shift t-start and t-end based on stage 1 segment results (+ t-center - 2)
-    for idx in range(len(results['video-id'])):
-        # get seg_id
-        seg_id = results['seg-id'][idx]
-        center = new_feat_center[seg_id]
-        # shift
-        results['t-start'][idx] += center - 2
-        results['t-end'][idx] += center - 2
+    results = shift_result(new_feat_center, results, args.seg_duration)
     if args.dump_result:
         dump_result_path = os.path.join(new_feat_path, 'final_result.pkl')
         with open(dump_result_path, 'wb') as f:
@@ -409,6 +398,34 @@ def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path,
     # evaluate
     mAP = det_eval.evaluate(results) # should be evaluated on the original video rather than the clipped video
     print(f"mAP: {mAP[0] * 100}")
+
+def single_cls_map(args, cfg, label_dict, action):
+    action_id = label_dict[action]
+    # search action ckpt dir
+    action_ckpt_dirs = os.listdir(args.ckpt2)
+    action_ckpt_dirs = [ckpt_dir for ckpt_dir in action_ckpt_dirs if action in ckpt_dir]
+    if len(action_ckpt_dirs) > 1:
+        print(f"Warning: Multiple ckpt dirs found for action {action}, using the first one.")
+    elif len(action_ckpt_dirs) == 0:
+        print(f"Error: No ckpt dir found for action {action}.")
+        raise FileNotFoundError
+    action_ckpt_dir = os.path.join(args.ckpt2, action_ckpt_dirs[0])
+    args.ckpt = get_best_pth_from_dir(action_ckpt_dir)
+    print(f"Using ckpt: {args.ckpt}")
+    cfg['dataset']['desired_actions'] = [action]
+    return action_id
+
+def shift_result(new_feat_center, results, seg_duration):
+    shift = seg_duration / 2
+    for idx in range(len(results['video-id'])):
+        # get seg_id
+        seg_id = results['seg-id'][idx]
+        center = new_feat_center[seg_id]
+        # shift
+        results['t-start'][idx] += center - shift
+        results['t-end'][idx] += center - shift
+    return results
+
 
 def build_perfect_stage1_results(json_file, split='test'):
     # {video-id:[], t-start:[], t-end:[], score:[], label:[]}
@@ -724,8 +741,6 @@ def get_best_pth_from_dir(dir) -> str:
 
 ################################################################################
 if __name__ == '__main__':
-    import os
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     """Entry Point"""
     # the arg parser
     parser = argparse.ArgumentParser(
