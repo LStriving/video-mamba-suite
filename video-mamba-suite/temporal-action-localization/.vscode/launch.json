@@ -155,5 +155,64 @@
                 "debug"
             ]
         },
+        {
+            "name": "Train: visaul stage1 E2E(none+i3d)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/train2stage.py",
+            "console": "integratedTerminal",
+            "args": [
+                "configs/2stage/stage1/mamba_swallow_i3d_train_stage1_traintest_e2e_224.yaml",
+                "--output",
+                "debug"
+            ]
+        },
+        {
+            "name": "Debug eval2tower",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/eval2tower.py",
+            "args": [
+                "--config2",
+                "configs/2stage/2tower/crossattn/vw/mamba_swallow_i3d_secondstage_2tower_vw${input:vw}.yaml",
+                "--config3",
+                "configs/2stage/heatmap/e2e/heatmap_secondstage_mvit_mvit_p2l3_ep30_sigma4.yaml",
+                "--re-extract",
+                "--ckpt2",
+                "ckpts/link2/2tower-crossattn",
+                "--cache_dir",
+                "tmp/threshold0.23",
+                "--heatmap_dir",
+                "tmp/raw_heatmap_sigma4_p0.23",
+                "--heatmap",
+                "--heatmap_sigma",
+                "4",
+                "--heatmap_branch",
+                "none",
+                "--heatmap_size",
+                "56",
+                "--image_size",
+                "128",
+                "--tower_nam",
+                "CrossAttnEarlyFusion"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ],
+    "inputs": [
+        {
+            "id": "vw",
+            "type": "pickString",
+            "description": "选择 vw 值",
+            "options": [
+                "0.0",
+                "0.5",
+                "0.7",
+                "0.8",
+                "0.9",
+                "1.0"
+            ]
+        }
     ]
 }
