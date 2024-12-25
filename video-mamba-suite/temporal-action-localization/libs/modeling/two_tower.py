@@ -5,7 +5,7 @@ from fairscale.nn.checkpoint import checkpoint_wrapper
 
 from .meta_archs import PtTransformerClsHead, PtTransformerRegHead
 from .models import register_two_tower, make_neck
-from .blocks import PostNormCrossTransformerBlock, PreNormCrossTransformerBlock
+from .blocks import PostNormCrossTransformerBlock, PreNormCrossTransformerBlock, PreNormDINOTransformerBlock
 
 
 class TwoTower(nn.Module):
@@ -339,10 +339,10 @@ class CrossAttnEarlyFusion(TwoTower):
         for i in range(self.num_layers):    # TODO: need to re-check when layer > 1
             original_v_inputs, original_v_masks = batched_v_inputs, batched_v_masks
             # (query: visual, key/value: heatmap)
-            batched_v_inputs, batched_v_masks = self.h2v[i](query=batched_v_inputs, key=batched_h_inputs.detach(), value=batched_h_inputs.detach(), 
+            batched_v_inputs, batched_v_masks = self.h2v[i](query=batched_v_inputs, key=batched_h_inputs, value=batched_h_inputs, 
                                                             query_mask=batched_v_masks, kv_mask=batched_h_masks)
             # (query: heatmap, key/value: visual)
-            batched_h_inputs, batched_h_masks = self.v2h[i](query=batched_h_inputs, key=original_v_inputs.detach(), value=original_v_inputs.detach(), 
+            batched_h_inputs, batched_h_masks = self.v2h[i](query=batched_h_inputs, key=original_v_inputs, value=original_v_inputs, 
                                                             query_mask=original_v_masks, kv_mask=original_v_masks)
         
         # forward the network (backbone -> neck -> heads)
@@ -368,7 +368,6 @@ class CrossAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
                 v_input_dim,
                 h_input_dim,
                 cfg1['model']['n_head'],
-                pre_norm=True
             )) for _ in range(num_layers)]
         )
         self.v2h = nn.ModuleList(
@@ -376,6 +375,33 @@ class CrossAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
                 h_input_dim,
                 v_input_dim,
                 cfg2['model']['n_head'],
-                pre_norm=True
+            )) for _ in range(num_layers)]
+        )
+
+@register_two_tower('DINOAttnEarlyFusion')
+class DINOAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2, vw, num_layers, act_checkpoint)
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"DINOAttnEarlyFusion: vw={vw}, num_layers={num_layers}")
+        print(f"v_input_dim={v_input_dim}, h_input_dim={h_input_dim}")
+
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PreNormDINOTransformerBlock(
+                v_input_dim,
+                h_input_dim,
+                cfg1['model']['n_head'],
+                path_pdrop=0.1,
+                init_value=cfg1['two_tower']['init_value']
+            )) for _ in range(num_layers)]
+        )
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PreNormDINOTransformerBlock(
+                h_input_dim,
+                v_input_dim,
+                cfg2['model']['n_head'],
+                path_pdrop=0.1,
+                init_value=cfg1['two_tower']['init_value']
             )) for _ in range(num_layers)]
         )

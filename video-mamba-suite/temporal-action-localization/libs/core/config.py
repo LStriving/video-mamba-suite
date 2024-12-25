@@ -143,6 +143,7 @@ DEFAULTS = {
         "vw": 0.5,
         "include_ori_loss": False,
         "vws": None,
+        "init_value": 1e-1,
     },
     "image_stem":{
 

@@ -233,7 +233,8 @@ def run(cfg, cfg2, args, action_label=None):
             # model
             model_eval = make_meta_arch(cfg['model_name'], **cfg['model'])
             model_eval2 = make_meta_arch(cfg2['model_name'], **cfg2['model'])
-            model_eval = make_two_tower(args.tower_name, model_eval, model_eval2, cfg, cfg2)
+            print(f'{args.tower_name} model loaded for evaluation')
+            model_eval = make_two_tower(args.tower_name, model_eval, model_eval2, cfg, cfg2, **cfg['two_tower'])
             # not ideal for multi GPU training, ok for now
             model_eval = nn.DataParallel(model_eval, device_ids=cfg['devices'])
             model_eval.load_state_dict(model_ema.module.state_dict())
@@ -242,7 +243,7 @@ def run(cfg, cfg2, args, action_label=None):
             output_file = None
             
             """5. Test the model"""
-            print("\nStart testing model {:s} ...".format(cfg['model_name']))
+            print("\nStart testing model {:s} ...".format(args.tower_name))
             start = time.time()
             result = infer_one_epoch(
                 val_loader,

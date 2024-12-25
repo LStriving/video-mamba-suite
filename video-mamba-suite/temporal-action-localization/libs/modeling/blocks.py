@@ -1251,7 +1251,39 @@ class PreNormCrossTransformerBlock(nn.Module):
             out += pos_embd * out_mask_float
         return out, out_mask
 
+class PreNormDINOTransformerBlock(PreNormCrossTransformerBlock):
+    def __init__(
+        self,
+        n_embd,                # dimension of the input features
+        kv_embd,               # dimension of the key and value features
+        n_head,                # number of attention heads
+        n_ds_strides=(1, 1),   # downsampling strides for q & x, k & v
+        n_out=None,            # output dimension, if None, set to input dim
+        n_hidden=None,         # dimension of the hidden layer in MLP
+        act_layer=nn.GELU,     # nonlinear activation used in MLP, default GELU
+        attn_pdrop=0.0,        # dropout rate for the attention map
+        proj_pdrop=0.0,        # dropout rate for the projection / MLP
+        path_pdrop=0.0,        # drop path rate
+        mha_win_size=-1,       # > 0 to use window mha
+        use_rel_pe=False,      # if to add rel position encoding to attention
+        init_value=1e-1,      # initial value for the scale
+    ):
+        super().__init__(
+            n_embd, kv_embd, n_head, n_ds_strides, n_out, n_hidden,
+            act_layer, attn_pdrop, proj_pdrop, path_pdrop, mha_win_size, use_rel_pe
+        )
+        self.gamma = nn.Parameter(torch.ones([1, n_embd, 1]) * init_value, requires_grad=True)
+        self.ln2 = None
+        self.mlp = None
+        self.drop_path_mlp = None
+        
 
+    def forward(self, query, key, value, query_mask, kv_mask, pos_embd=None):
+        # pre-LN transformer: https://arxiv.org/pdf/2002.04745.pdf
+        out, out_mask = self.attn(self.ln1(query), self.ln3(key), self.ln3(value), query_mask, kv_mask)
+        out_mask_float = out_mask.to(out.dtype)
+        out = self.pool_skip(query) * out_mask_float + self.drop_path_attn(out * self.gamma)
+        return out, out_mask
 
 class MulScaleTransformerBlock(TransformerBlock):
     def __init__(
@@ -1302,7 +1334,6 @@ class MulScaleTransformerBlock(TransformerBlock):
         if pos_embd is not None:
             out += pos_embd * out_mask_float
         return out, out_mask
-
 
 
 class ConvBlock(nn.Module):
