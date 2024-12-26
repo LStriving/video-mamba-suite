@@ -9,7 +9,7 @@ from torchvision.models.resnet import ResNet50_Weights
 from fairscale.nn.checkpoint import checkpoint_wrapper
 
 from .models import register_video_stem, register_image_stem
-from .blocks import MaskedPoolingMHCA, MaskedPoolingMHCAv2
+from .blocks import MaskMambaBlock, MaskedPoolingMHCA, MaskedPoolingMHCAv2, MaskMultiScaleMambaBlock
 from pytorch_i3d import InceptionI3d
 
 @register_image_stem('resnet50')
@@ -89,6 +89,8 @@ class SpatilMViT(nn.Module):
         self.patch_size = patch_size
         self.image_size = image_size
         self.embed_dim = embed_dim
+        self.pool_size = pool_size
+        self.pool_mode = pool_mode
         self.conv_proj = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
         
 
@@ -186,6 +188,46 @@ class SpatilMViT_v2(SpatilMViT):
             )
     
 
+@register_image_stem('MVMamba')
+class SpatilVMamba(SpatilMViT):
+    def __init__(
+        self,
+        drop_path_rate: float = 0.3, 
+        *args, 
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.blocks = nn.ModuleList()
+        for _ in range(self.n_layers):
+            self.blocks.append(
+                self.wrapper(MaskMultiScaleMambaBlock(
+                    n_embd=self.embed_dim,
+                    drop_path_rate=drop_path_rate,
+                    n_ds_stride=self.pool_size,
+                    pool_method=self.pool_mode
+                ))
+            )
+
+@register_image_stem('postpoolVMamba')
+class PostPoolVMamba(SpatilMViT):
+    def __init__(
+        self,
+        drop_path_rate: float = 0.3,
+        *args, 
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.blocks = nn.ModuleList()
+        for _ in range(self.n_layers):
+            self.blocks.append(
+                self.wrapper(MaskMambaBlock(
+                    n_embd=self.embed_dim,
+                    n_ds_stride=self.pool_size,
+                    pool_method=self.pool_mode,
+                    drop_path_rate=drop_path_rate,
+                ))
+            )
+
 @register_video_stem('i3d')
 class Inception3D(nn.Module):
     '''
@@ -261,7 +303,10 @@ class MViT(nn.Module):
     ):
         super().__init__()
         self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
+        self.embed_dim = embed_dim
         self.n_layers = num_layers
+        self.pool_size = pool_size
+        self.pool_mode = pool_mode
         self.blocks = nn.ModuleList()
         for _ in range(num_layers):
             self.blocks.append(
@@ -286,7 +331,47 @@ class MViT(nn.Module):
             x, mask = self.blocks[i](x, mask)
             
         return x, mask
-    
+
+@register_video_stem('MMamba')
+class MMamba(MViT):
+    def __init__(
+        self,
+        drop_path_rate: float = 0.3,
+        *args,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.blocks = nn.ModuleList()
+        for _ in range(self.n_layers):
+            self.blocks.append(
+                self.wrapper(MaskMultiScaleMambaBlock(
+                    n_embd=self.embed_dim,
+                    drop_path_rate=drop_path_rate,
+                    n_ds_stride=self.pool_size,
+                    pool_method=self.pool_mode
+                ))
+            )
+
+@register_video_stem('postpoolMamba')
+class PostPoolMamba(MViT):
+    def __init__(
+        self,
+        drop_path_rate: float = 0.3,
+        *args,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.blocks = nn.ModuleList()
+        for _ in range(self.n_layers):
+            self.blocks.append(
+                self.wrapper(MaskMambaBlock(
+                    n_embd=self.embed_dim,
+                    n_ds_stride=self.pool_size,
+                    drop_path_rate=drop_path_rate,
+                    pool_method=self.pool_mode
+                ))
+            )
+
 @register_video_stem('mvitV2')
 class MViT_v2(MViT):
     def __init__(

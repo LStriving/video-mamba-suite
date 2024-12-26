@@ -12,6 +12,7 @@ from torch.nn.functional import linear, softmax, dropout
 from .weight_init import trunc_normal_
 from mamba_ssm.modules.mamba_simple import Mamba as ViM
 from mamba_ssm.modules.mamba_new import Mamba as DBM
+from mamba_ssm.modules.mamba_mulscale import Mamba as MDBM
 Tensor = torch.Tensor
 from typing import Optional, Tuple
 import warnings
@@ -1463,7 +1464,7 @@ class MaxPooler(nn.Module):
             self,
             kernel_size,
             stride,
-            padding,):
+            padding: int = 0,):
         super().__init__()
         self.ds_pooling = nn.MaxPool1d(
             kernel_size, stride=stride, padding=padding)
@@ -1503,7 +1504,8 @@ class MaskMambaBlock(nn.Module):
         kernel_size=4,         # conv kernel size
         n_ds_stride=1,         # downsampling stride for the current layer
         drop_path_rate=0.3,         # drop path rate
-        use_mamba_type="dbm"
+        use_mamba_type="dbm",
+        pool_method='max',          # pooling method
     ) -> None:
         super().__init__()
         if use_mamba_type == 'dbm':
@@ -1514,7 +1516,12 @@ class MaskMambaBlock(nn.Module):
         else:
             raise NotImplementedError
         if n_ds_stride > 1:
-            self.downsample = MaxPooler(kernel_size=3, stride=2, padding=1)
+            if pool_method == 'avg':
+                self.downsample = AvgPooler(kernel_size=n_ds_stride, stride=n_ds_stride, padding=0)
+            elif pool_method == 'max':
+                self.downsample = MaxPooler(kernel_size=n_ds_stride, stride=n_ds_stride, padding=0)
+            else:
+                raise NotImplementedError
         else:
             self.downsample = None
             
@@ -1541,6 +1548,57 @@ class MaskMambaBlock(nn.Module):
 
         return  x, mask
 
+class MaskMultiScaleMambaBlock(nn.Module):
+    '''
+    Mamba block with MViT style pooling
+    '''
+    def __init__(
+        self,        
+        n_embd,                     # dimension of the input features
+        kernel_size=4,              # conv kernel size
+        n_ds_stride=1,              # downsampling stride for the current layer
+        drop_path_rate=0.3,         # drop path rate
+        pool_method='avg',          # pooling method       
+        use_mamba_type="mdbm",
+    ) -> None:
+        super().__init__()
+        assert pool_method in ['avg', 'max']
+        if n_ds_stride == 1:
+            print("Warning: n_ds_stride is 1, no downsampling will be performed.")
+        self.stride = n_ds_stride
+        if use_mamba_type == 'mdbm':
+            self.mamba = MDBM(n_embd, d_conv=kernel_size, pool_method=pool_method, 
+                              pool_size=n_ds_stride, use_fast_path=True, expand=1)
+        else:
+            raise NotImplementedError
+              
+        self.norm = nn.LayerNorm(n_embd)
+        if pool_method == 'avg':
+            self.pooler = AvgPooler(kernel_size=n_ds_stride, stride=n_ds_stride, padding=0)
+        elif pool_method == 'max':
+            self.pooler = MaxPooler(kernel_size=n_ds_stride, stride=n_ds_stride, padding=0)
+        elif pool_method == 'none' or pool_method is None:
+            self.pooler = nn.Identity()
+        else:
+            raise NotImplementedError
+                
+        # drop path
+        if drop_path_rate > 0.0:
+            self.drop_path = AffineDropPath(n_embd, drop_prob=drop_path_rate)
+        else:
+            self.drop_path = nn.Identity()
+
+    def forward(self, x, mask):
+        res, mask = self.pooler(x, mask)
+        x_ = x.transpose(1,2)
+        x_ = self.norm(x_)
+        x_ = self.mamba(x_).transpose(1, 2)
+        
+        x = x_ * mask.to(x.dtype)
+
+        x  = res + self.drop_path(x)
+
+        return  x, mask
 
     
 class LocalGlobalTemporalEncoder(nn.Module):
