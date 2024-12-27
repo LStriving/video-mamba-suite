@@ -192,7 +192,9 @@ class SpatilMViT_v2(SpatilMViT):
 class SpatilVMamba(SpatilMViT):
     def __init__(
         self,
-        drop_path_rate: float = 0.3, 
+        drop_path_rate: float = 0.3,
+        gamma: float = 0.0, 
+        mamba_type: str = 'mdbm',
         *args, 
         **kwargs
     ):
@@ -204,7 +206,9 @@ class SpatilVMamba(SpatilMViT):
                     n_embd=self.embed_dim,
                     drop_path_rate=drop_path_rate,
                     n_ds_stride=self.pool_size,
-                    pool_method=self.pool_mode
+                    pool_method=self.pool_mode,
+                    gamma=gamma,
+                    use_mamba_type=mamba_type.lower()
                 ))
             )
 
@@ -337,6 +341,7 @@ class MMamba(MViT):
     def __init__(
         self,
         drop_path_rate: float = 0.3,
+        gamma: float = 0.1,
         *args,
         **kwargs
     ):
@@ -348,7 +353,8 @@ class MMamba(MViT):
                     n_embd=self.embed_dim,
                     drop_path_rate=drop_path_rate,
                     n_ds_stride=self.pool_size,
-                    pool_method=self.pool_mode
+                    pool_method=self.pool_mode,
+                    gamma=gamma
                 ))
             )
 

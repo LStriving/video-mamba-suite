@@ -54,6 +54,7 @@ def run(cfg, args, action_label=None):
     # re-scale learning rate / # workers based on number of GPUs
     cfg['opt']["learning_rate"] *= len(cfg['devices'])
     cfg['loader']['num_workers'] *= len(cfg['devices'])
+    cfg['loader']['accum_steps'] = 1 if cfg['loader']['accum_steps'] <= 0 else cfg['loader']['accum_steps']
 
     """2. create dataset / dataloader"""
     train_dataset = make_dataset(
@@ -75,7 +76,7 @@ def run(cfg, args, action_label=None):
     # optimizer
     optimizer = make_optimizer(model, cfg['opt'])
     # schedule
-    num_iters_per_epoch = len(train_loader)
+    num_iters_per_epoch = len(train_loader) // cfg['loader']['accum_steps']
     scheduler = make_scheduler(optimizer, cfg['opt'], num_iters_per_epoch)
 
     # enable model EMA
@@ -168,7 +169,8 @@ def run(cfg, args, action_label=None):
             model_ema = model_ema,
             clip_grad_l2norm = cfg['train_cfg']['clip_grad_l2norm'],
             tb_writer=tb_writer,
-            print_freq=args.print_freq
+            print_freq=args.print_freq,
+            accum_step_num=cfg['loader']['accum_steps']
         )
         
         start_eval = 5 if max_epochs > 30 else 0

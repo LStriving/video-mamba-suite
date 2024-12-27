@@ -16,10 +16,14 @@ def make_dataset(name, is_training, split, **kwargs):
    dataset = datasets[name](is_training, split, **kwargs)
    return dataset
 
-def make_data_loader(dataset, is_training, generator, batch_size, num_workers):
+def make_data_loader(dataset, is_training, generator, batch_size, num_workers, accum_steps=1):
     """
         A simple dataloder builder
     """
+    if accum_steps > 0 and is_training:
+        assert batch_size % accum_steps == 0, "Only support accum_steps that divides batch_size"
+        batch_size = batch_size // accum_steps
+
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,

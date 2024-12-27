@@ -41,6 +41,7 @@ DEFAULTS = {
     "loader": {
         "batch_size": 8,
         "num_workers": 4,
+        "accum_steps": -1, # -1 to disable, > 0 to use gradient accumulation
     },
     # network architecture
     "model": {

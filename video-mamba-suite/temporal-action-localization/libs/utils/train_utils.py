@@ -70,8 +70,8 @@ def make_optimizer(model, optimizer_config):
     no_decay = set()
     whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv1d, MaskedConv1D, 
                                 torch.nn.Linear, torch.nn.Parameter, torch.nn.Conv2d, torch.nn.Conv3d)
-    blacklist_weight_modules = (LayerNorm, torch.nn.GroupNorm, nn.LayerNorm)
-
+    blacklist_weight_modules = (LayerNorm, torch.nn.GroupNorm, nn.LayerNorm, nn.BatchNorm3d, nn.MaxPool3d, nn.AdaptiveAvgPool3d)
+    # TODO: filter with `required_grad`
     # loop over all modules / params
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
@@ -87,6 +87,8 @@ def make_optimizer(model, optimizer_config):
                 no_decay.add(fpn)
             elif pn.endswith('scale') and isinstance(m, (Scale, AffineDropPath)):
                 # corner case of our scale layer
+                no_decay.add(fpn)
+            elif pn.endswith('gamma'):
                 no_decay.add(fpn)
             elif pn.endswith('rel_pe'):
                 # corner case for relative position encoding
@@ -269,7 +271,8 @@ def train_one_epoch(
     model_ema = None,
     clip_grad_l2norm = -1,
     tb_writer = None,
-    print_freq = 20
+    print_freq = 20,
+    accum_step_num= -1,
 ):
     """Training the model for one epoch"""
     # set up meters
@@ -279,15 +282,19 @@ def train_one_epoch(
     num_iters = len(train_loader)
     # switch to train mode
     model.train()
+    if accum_step_num < 0:
+        accum_step_num = 1
 
     # main training loop
     print("\n[Train]: Epoch {:d} started".format(curr_epoch))
     start = time.time()
     for iter_idx, video_list in (enumerate(train_loader, 0)):
-        # zero out optim
-        optimizer.zero_grad(set_to_none=True)
+        if (iter_idx + 1) % accum_step_num == 0:
+            # zero out optim
+            optimizer.zero_grad(set_to_none=True)
         # forward / backward the model
         losses = model(video_list)
+        losses['final_loss'] = losses['final_loss'] / accum_step_num
         losses['final_loss'].backward()
         # gradient cliping (to stabilize training if necessary)
         if clip_grad_l2norm > 0.0:
@@ -296,10 +303,11 @@ def train_one_epoch(
                 clip_grad_l2norm
             )
         # step optimizer / scheduler
-        optimizer.step()
-        scheduler.step()
+        if (iter_idx + 1) % accum_step_num == 0:
+            optimizer.step()
+            scheduler.step()
 
-        if model_ema is not None:
+        if (iter_idx + 1) % accum_step_num == 0 and model_ema is not None:
             model_ema.update(model)
 
         # printing (only check the stats when necessary to avoid extra cost)
