@@ -1,5 +1,5 @@
 # Copyright (c) 2023, Tri Dao, Albert Gu.
-
+from functools import partial
 import math
 from typing import Optional
 
