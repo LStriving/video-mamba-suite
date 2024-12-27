@@ -1,3 +1,4 @@
+from functools import partial
 import math
 import numpy as np
 
@@ -9,10 +10,12 @@ from torch.nn.init import constant_
 from torch.nn.init import xavier_normal_
 from torch.nn.parameter import Parameter
 from torch.nn.functional import linear, softmax, dropout
-from .weight_init import trunc_normal_
+# from .weight_init import trunc_normal_
 from mamba_ssm.modules.mamba_simple import Mamba as ViM
 from mamba_ssm.modules.mamba_new import Mamba as DBM
 from mamba_ssm.modules.mamba_mulscale import Mamba as MDBM
+from mamba_ssm.modules.mamba_vision_mulscale import Mamba as MViM
+from mamba_ssm.modules.mamba_v2m_mulscale import Mamba as MV2D
 Tensor = torch.Tensor
 from typing import Optional, Tuple
 import warnings
@@ -521,6 +524,11 @@ class MaskedPoolingMHCA(nn.Module):
         elif pool_method.lower() == 'max':
             self.pool_qx = MaxPooler(pool_qx_size, stride=pool_qx_size)
             self.pool_kv = MaxPooler(pool_kv_size, stride=pool_kv_size)
+        elif pool_method.lower() == 'conv':
+            kernel_size = pool_qx_size + 1
+            padding = kernel_size // 2
+            self.pool_qx = MaskedConv1D(self.n_embd, self.n_embd, kernel_size, stride=pool_qx_size, padding=padding, groups=self.n_embd, bias=False)
+            self.pool_kv = MaskedConv1D(self.n_embd, self.n_embd, kernel_size, stride=pool_kv_size, padding=padding, groups=self.n_embd, bias=False)
 
     def forward(self, x, mask):
         # x: batch size, feature channel, sequence length,
@@ -1558,17 +1566,27 @@ class MaskMultiScaleMambaBlock(nn.Module):
         kernel_size=4,              # conv kernel size
         n_ds_stride=1,              # downsampling stride for the current layer
         drop_path_rate=0.3,         # drop path rate
-        pool_method='avg',          # pooling method       
+        pool_method:str='avg',      # pooling method       
         use_mamba_type="mdbm",
+        gamma=0.0,
     ) -> None:
         super().__init__()
-        assert pool_method in ['avg', 'max']
+        assert pool_method in ['avg', 'max', 'conv', 'none', '2d-avg', '2d-max', '2d-conv', '2d_avg', '2d_max', '2d_conv']
         if n_ds_stride == 1:
             print("Warning: n_ds_stride is 1, no downsampling will be performed.")
         self.stride = n_ds_stride
+        pool_method = pool_method.lower()
+        if pool_method.startswith('2d'):
+            assert math.sqrt(n_ds_stride) == int(math.sqrt(n_ds_stride)), "n_ds_stride must be a square number for 2d pooling"
         if use_mamba_type == 'mdbm':
             self.mamba = MDBM(n_embd, d_conv=kernel_size, pool_method=pool_method, 
                               pool_size=n_ds_stride, use_fast_path=True, expand=1)
+        elif use_mamba_type == 'mvim':
+            self.mamba = MViM(n_embd, d_conv=kernel_size, bimamba_type="v2", pool_method=pool_method,
+                              pool_size=n_ds_stride, use_fast_path=True)
+        elif use_mamba_type == 'mv2d':
+            self.mamba = MV2D(n_embd, d_conv=kernel_size, bimamba_type="2d", pool_method=pool_method,
+                              pool_size=n_ds_stride, use_fast_path=True)
         else:
             raise NotImplementedError
               
@@ -1577,11 +1595,39 @@ class MaskMultiScaleMambaBlock(nn.Module):
             self.pooler = AvgPooler(kernel_size=n_ds_stride, stride=n_ds_stride, padding=0)
         elif pool_method == 'max':
             self.pooler = MaxPooler(kernel_size=n_ds_stride, stride=n_ds_stride, padding=0)
+        elif pool_method == 'conv':
+            kernel_size = n_ds_stride + 1
+            padding = (n_ds_stride + 1) // 2
+            self.pooler = MaskedConv1D(n_embd, n_embd, kernel_size=kernel_size, stride=n_ds_stride, padding=padding, groups=n_embd)
         elif pool_method == 'none' or pool_method is None:
             self.pooler = nn.Identity()
+        elif pool_method == '2d-avg' or pool_method == '2d_avg':
+            stride = int(math.sqrt(n_ds_stride))
+            stride = (stride, stride)
+            pool = nn.AvgPool2d(stride, stride, padding=0)
+            self.pooler = partial(self._2d_pooling, pool=pool)
+        elif pool_method == '2d-max' or pool_method == '2d_max':
+            stride = int(math.sqrt(n_ds_stride))
+            stride = (stride, stride)
+            pool = nn.MaxPool2d(stride, stride, padding=0)
+            self.pooler = partial(self._2d_pooling, pool=pool)
+        elif pool_method == '2d-conv' or pool_method == '2d_conv': # TODO: need to test and verify (considering different length of input)
+            n_ds_stride = int(math.sqrt(n_ds_stride))
+            padding = (n_ds_stride + 1) // 2
+
+            kernel_size = (n_ds_stride + 1, n_ds_stride + 1)
+            padding = (padding, padding)
+            n_ds_stride = (n_ds_stride, n_ds_stride)
+            pool = nn.Conv2d(n_embd, n_embd, kernel_size=kernel_size, stride=n_ds_stride, padding=padding, groups=n_embd)
+            self.pooler = partial(self._2d_pooling, pool=pool)
         else:
             raise NotImplementedError
-                
+        
+        if gamma > 0:
+            self.gamma = nn.Parameter(torch.ones([1, n_embd, 1]) * gamma, requires_grad=True)
+        else:
+            self.gamma = 1
+
         # drop path
         if drop_path_rate > 0.0:
             self.drop_path = AffineDropPath(n_embd, drop_prob=drop_path_rate)
@@ -1596,10 +1642,28 @@ class MaskMultiScaleMambaBlock(nn.Module):
         
         x = x_ * mask.to(x.dtype)
 
-        x  = res + self.drop_path(x)
+        x  = res + self.drop_path(x * self.gamma)
 
         return  x, mask
 
+    def _2d_pooling(self, x, mask, pool):
+        B, C, N = x.size()
+        stride = int(math.sqrt(self.stride))
+        h = w = int(np.sqrt(N))
+        x = x.view(B, C, h, w)
+        mask = mask.view(B, 1, h, w)
+
+        x = pool(x)
+        # downsample the mask using nearest neighbor
+        mask = F.interpolate(
+            mask.to(x.dtype), size=(h // stride, w // stride), mode='nearest')
+
+        x = x.view(B, C, -1)
+        mask = mask.view(B, 1, -1)
+
+        mask = mask.bool()
+
+        return x, mask
     
 class LocalGlobalTemporalEncoder(nn.Module):
     def __init__(self, input_dim, dropout, temporal_scale=128, window_size=41,use_vswg=False):
@@ -2198,3 +2262,20 @@ class PatchEmbed(nn.Module):
             x.flatten(2).transpose(1, 2),
             x.shape,
         )  
+    
+if __name__ == '__main__':
+    block = MaskMultiScaleMambaBlock(
+        n_embd=256,
+        n_ds_stride=4,
+        pool_method='2d-max'
+    )
+    x = torch.rand(1, 256, 64)
+    mask = torch.ones(1, 1, 64)
+
+    # all to cuda
+    x = x.cuda()
+    mask = mask.cuda()
+    block = block.cuda()
+
+    y, mask = block(x, mask)
+    print(y.shape, mask.shape)

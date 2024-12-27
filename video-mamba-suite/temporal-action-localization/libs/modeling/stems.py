@@ -82,6 +82,8 @@ class SpatilMViT(nn.Module):
             pool_size: int,
             pool_mode: str,
             act_checkpoint: bool,
+            abs_pos_embed: bool = False,
+            pos_drop: float = 0.0,
             *args, 
             **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -115,6 +117,14 @@ class SpatilMViT(nn.Module):
                     pool_method=pool_mode
                 ))
             )
+        
+        num_patches = (image_size // patch_size) ** 2
+        
+        self.abs_pos_embed = abs_pos_embed
+        if self.abs_pos_embed:
+            self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+            nn.init.trunc_normal_(self.pos_embed, std=.02)
+            self.pos_drop = nn.Dropout(p=pos_drop)
 
 
     def _process_image(self, x):
@@ -129,6 +139,9 @@ class SpatilMViT(nn.Module):
         x = x.reshape(n, self.embed_dim, n_h * n_w)
         x = x.permute(0, 2, 1)
         
+        if self.abs_pos_embed:
+            x = x + self.pos_embed
+            x = self.pos_drop(x)
         return x
 
 

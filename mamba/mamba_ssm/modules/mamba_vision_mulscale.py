@@ -1,5 +1,5 @@
 # Copyright (c) 2023, Tri Dao, Albert Gu.
-from functools import partial
+
 import math
 from typing import Optional
 
@@ -50,9 +50,11 @@ class Mamba(nn.Module):
         layer_idx=None,
         device=None,
         dtype=None,
+        bimamba_type="none",
+        if_devide_out=False,
         init_layer_scale=None,
         pool_size=1,
-        pool_method="avg",
+        pool_method="mean",
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -64,8 +66,10 @@ class Mamba(nn.Module):
         self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
+        self.bimamba_type = bimamba_type
+        self.if_devide_out = if_devide_out
 
-        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2 * 2 , bias=bias, **factory_kwargs)
+        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
 
         self.conv1d = nn.Conv1d(
             in_channels=self.d_inner,
@@ -85,6 +89,7 @@ class Mamba(nn.Module):
         )
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
 
+
         pool_method = pool_method.lower()
         self.pool_method = pool_method
         if pool_method.startswith('2d-'):
@@ -92,7 +97,7 @@ class Mamba(nn.Module):
                  "pool_size must be a square number"
             pool_size = int(math.sqrt(pool_size))
         self.pool_size = pool_size
-
+            
         if self.pool_method == "avg":
             self.pool = nn.AvgPool1d(self.pool_size, stride=self.pool_size, padding=0)
         elif self.pool_method == "max":
@@ -118,7 +123,6 @@ class Mamba(nn.Module):
             self.pool = partial(self._2d_pool, pool=pool)
         else:
             raise NotImplementedError
-
         # Initialize special dt projection to preserve variance at initialization
         dt_init_std = self.dt_rank**-0.5 * dt_scale
         if dt_init == "constant":
@@ -154,8 +158,37 @@ class Mamba(nn.Module):
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
+        # bidirectional
+        assert bimamba_type == "v2"
 
-        self.out_proj = nn.Linear(self.d_inner * 2, self.d_model, bias=bias, **factory_kwargs)
+        A_b = repeat(
+            torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
+            "n -> d n",
+            d=self.d_inner,
+        ).contiguous()
+        A_b_log = torch.log(A_b)  # Keep A_b_log in fp32
+        self.A_b_log = nn.Parameter(A_b_log)
+        self.A_b_log._no_weight_decay = True 
+
+        self.conv1d_b = nn.Conv1d(
+            in_channels=self.d_inner,
+            out_channels=self.d_inner,
+            bias=conv_bias,
+            kernel_size=d_conv,
+            groups=self.d_inner,
+            padding=d_conv - 1,
+            **factory_kwargs,
+        )
+
+        self.x_proj_b = nn.Linear(
+            self.d_inner, self.dt_rank + self.d_state * 2, bias=False, **factory_kwargs
+        )
+        self.dt_proj_b = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
+
+        self.D_b = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
+        self.D_b._no_weight_decay = True
+
+        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
 
     def _2d_pool(self, x, pool):
         B, D, L = x.shape
@@ -164,8 +197,8 @@ class Mamba(nn.Module):
         x = pool(x)
         x = x.view(B, D, -1)
         return x
-        
 
+        
     def python_mamba_inner_fn_no_out_proj(self, xz, A, conv_state, ssm_state, seqlen, conv1d, x_proj, dt_proj, D, use_pytorch_conv=False):
         x, z = xz.chunk(2, dim=1)
         # Compute short convolution
@@ -213,7 +246,7 @@ class Mamba(nn.Module):
     def forward(self, hidden_states, inference_params=None):
         """
         hidden_states: (B, L, D)
-        Returns: (B, L/pool_size, D)
+        Returns: same shape as hidden_states
         """
         batch, seqlen, dim = hidden_states.shape
 
@@ -224,27 +257,23 @@ class Mamba(nn.Module):
                 # The states are updated inplace
                 out, _, _ = self.step(hidden_states, conv_state, ssm_state)
                 return out
+
         # We do matmul and transpose BLH -> HBL at the same time
         xz = rearrange(
             self.in_proj.weight @ rearrange(hidden_states, "b l d -> d (b l)"),
             "d (b l) -> b d l",
             l=seqlen,
-        )   
+        )
         if self.in_proj.bias is not None:
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
-
-        # xz.shape: (B, D, L)
-        #NOTE pooling here
         xz = self.pool(xz)
 
-        xz_f, xz_b = torch.chunk(xz, 2, dim=1)  # (B, D, L)
-        xz_b = xz_b.flip([-1])
-        xz = torch.cat([xz_f, xz_b], dim=0)
-        
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
-            out = mamba_inner_fn_no_out_proj(
+            if self.bimamba_type == "v2":
+                A_b = -torch.exp(self.A_b_log.float())
+                out = mamba_inner_fn_no_out_proj(
                     xz,
                     self.conv1d.weight,
                     self.conv1d.bias,
@@ -257,9 +286,53 @@ class Mamba(nn.Module):
                     delta_bias=self.dt_proj.bias.float(),
                     delta_softplus=True,
                 )
-            out = out.chunk(2)
-            out = torch.cat([out[0], out[1].flip([-1])], dim=1)
-            out = F.linear(rearrange(out, "b d l -> b l d"), self.out_proj.weight, self.out_proj.bias)
+                out_b = mamba_inner_fn_no_out_proj(
+                    xz.flip([-1]),
+                    self.conv1d_b.weight,
+                    self.conv1d_b.bias,
+                    self.x_proj_b.weight,
+                    self.dt_proj_b.weight,
+                    A_b,
+                    None,
+                    None,
+                    self.D_b.float(),
+                    delta_bias=self.dt_proj_b.bias.float(),
+                    delta_softplus=True,
+                )
+                # F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias)
+                if not self.if_devide_out:
+                    out = F.linear(rearrange(out + out_b.flip([-1]), "b d l -> b l d"), self.out_proj.weight, self.out_proj.bias)
+                else:
+                    out = F.linear(rearrange(out + out_b.flip([-1]), "b d l -> b l d") / 2, self.out_proj.weight, self.out_proj.bias)
+            else:
+                out = mamba_inner_fn(
+                    xz,
+                    self.conv1d.weight,
+                    self.conv1d.bias,
+                    self.x_proj.weight,
+                    self.dt_proj.weight,
+                    self.out_proj.weight,
+                    self.out_proj.bias,
+                    A,
+                    None,  # input-dependent B
+                    None,  # input-dependent C
+                    self.D.float(),
+                    delta_bias=self.dt_proj.bias.float(),
+                    delta_softplus=True,
+                )
+        else:
+            if self.bimamba_type == "v2":
+                out = self.python_mamba_inner_fn_no_out_proj(xz, A, conv_state, ssm_state, seqlen, self.conv1d, self.x_proj, self.dt_proj, self.D, use_pytorch_conv=True)
+                A_b = -torch.exp(self.A_b_log.float())
+                out_b = self.python_mamba_inner_fn_no_out_proj(xz.flip([-1]), A_b, conv_state, ssm_state, seqlen, self.conv1d_b, self.x_proj_b, self.dt_proj_b, self.D_b, use_pytorch_conv=True)
+                if not self.if_devide_out:
+                    out = F.linear(rearrange(out + out_b.flip([-1]), "b d l -> b l d"), self.out_proj.weight, self.out_proj.bias)
+                else:
+                    out = F.linear(rearrange(out + out_b.flip([-1]), "b d l -> b l d") / 2, self.out_proj.weight, self.out_proj.bias)
+            else:
+                out = self.python_mamba_inner_fn(xz, A, conv_state, ssm_state, seqlen)
+                out = rearrange(out, "b d l -> b l d")
+                out = self.out_proj(out)
         return out
 
     def step(self, hidden_states, conv_state, ssm_state):
@@ -409,50 +482,4 @@ class Block(nn.Module):
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
         return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
 
-
-
-if __name__ == "__main__":
-    # Test Mamba
-    import torch.autograd.profiler as profiler
-    import time
-    dim = 1024
-    frame = 128
-    bs = 1
-    n_head = 16
-    model = Mamba(dim).cuda().to(torch.float16)
-    from flash_attn.modules.mha import MHA
-    from flash_attn.modules.mlp import Mlp
-    from avion.models.transformer import ResidualAttentionBlock
-    
-    
-    attn = ResidualAttentionBlock(dim, n_head, use_flash_attn=True).cuda().to(torch.float16)
-    
-    
-    
-    # param
-    num_params = sum(p.numel() for p in model.parameters())
-
-    hidden_states = torch.rand(bs, frame*14*14, dim).cuda().to(torch.float16)
-
-    
-    print("mamba")
-    for i in range(100):
-        start = time.time()
-        with torch.no_grad():
-            out = model(hidden_states)
-        torch.cuda.synchronize()
-        print((time.time()-start) * 1000, "ms")
-    
-    print("flash attn")
-    for i in range(100):
-        start = time.time()
-        with torch.no_grad():
-            out = attn(hidden_states)
-        torch.cuda.synchronize()
-        print((time.time()-start)*1000, "ms")
-
-    
-    
-    print(hidden_states.shape)
-    
     
