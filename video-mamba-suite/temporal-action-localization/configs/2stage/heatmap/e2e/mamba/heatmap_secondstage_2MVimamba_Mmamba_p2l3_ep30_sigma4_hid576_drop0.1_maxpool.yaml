@@ -1,0 +1,101 @@
+dataset_name: heatmap_rawdata
+train_split: ['train']
+val_split: ['validation']
+model_name: E2Eformer
+dataset: {
+  json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
+  # feat_folder: ./data/swallow/stage_2/resnet50_keypointfeat_56,
+  feat_folder: data/swallow/stage_2/raw_heatmap_sigma4,
+  file_prefix: ~,
+  file_ext: .npy,
+  num_classes: 1,
+  input_dim: 576,
+  feature_type: "",
+  # feature_type: "_spatial_feature",
+  #2048+768, 1024+768,1280+1024
+  feat_stride: 3,
+  num_frames: 8,
+  # serve as data augmentation
+  trunc_thresh: 0.5,
+  crop_ratio: [0.9, 1.0],
+  max_seq_len: 192,
+  two_stage: True,
+  stage_at: 2,
+  desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
+  resize_to: 56,
+}
+model: {
+  backbone_type: mamba,
+  backbone_arch: [2, 2, 4],
+  max_buffer_len_factor: 1.0,
+  # 192 - 96 - 48 - 24 - 12 - 6
+  n_mha_win_size: [25, 25, 25, 25, -1],
+  regression_range: [
+    [0, 4], [4, 8], [8, 16], [16, 32], [32, 10000]
+  ],
+  scale_factor: 2,
+  fpn_type: identity,
+  image_stem: MVMamba,
+  video_stem: MMamba,
+  frozen_image_embed: False,
+}
+opt: {
+  learning_rate: 0.0001,
+  epochs: 30,
+  weight_decay: 0.05,
+  warmup: True,
+  warmup_epochs: 5,
+}
+loader: {
+  batch_size: 16,
+}
+train_cfg: {
+  init_loss_norm: 100,
+  clip_grad_l2norm: 1.0,
+  cls_prior_prob: 0.01,
+  center_sample: radius,
+  center_sample_radius: 1.5,
+  droppath: 0.1,
+}
+# the inference on THUMOS is quite different from EPIC-kitchens
+# a major performance gain is achieved by fusing external classification scores
+# doing so will require disable multiclass_nms and enable score fusion
+test_cfg: {
+  voting_thresh: 0.7,
+  pre_nms_topk: 2000,
+  max_seg_num: 200,
+  min_score: 0.001,
+  # when using external scores, our model is generating "proposals"
+  # multiclass_nms: False,
+  # ext_score_file: ./data/thumos/annotations/thumos14_cls_scores.pkl,
+  # comment out L47-48 and uncomment L50 to disable score fusion
+  multiclass_nms: True,
+}
+image_stem: {
+  image_size: 56,
+  patch_size: 7,
+  embed_dim: 576,
+  in_channels: 1,
+  num_heads: 4,
+  attn_dropout: 0.0,
+  num_layers: 3,
+  pool_size: 4,
+  pool_mode: max,
+  drop_path_rate: 0.1,
+  act_checkpoint: True,
+  mamba_type: mvim
+}
+video_stem: {
+  embed_dim: 576,
+  num_heads: 4,
+  attn_dropout: 0.0,
+  num_layers: 3,
+  pool_size: 2,
+  pool_mode: max,
+  drop_path_rate: 0.1,
+  act_checkpoint: True,
+}
+keypoint: {
+  sigma: 4,
+}
+output_folder: ./ckpts/link2/e2e_heatmap_stage2_2MVimambaNMmamba_ep30_sigma4_drop.1_maxpool_hid576/
