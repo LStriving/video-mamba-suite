@@ -34,6 +34,7 @@ class HeatmapRawDataDataset(SwallowDataset):
         stage_at=0,      # stage to start training
         desired_actions=None, # desired action label names):
         resize_to:int=None,  # resize the input features
+        **kwargs
     ):
         super().__init__(is_training, split, feat_folder, json_file, feat_stride, num_frames, default_fps, downsample_rate, max_seq_len, trunc_thresh, crop_ratio, input_dim, num_classes, file_prefix, file_ext, force_upsampling, feature_type, two_stage, stage_at, desired_actions)
         self.resize_to = resize_to

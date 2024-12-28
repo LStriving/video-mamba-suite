@@ -336,7 +336,7 @@ class CrossAttnEarlyFusion(TwoTower):
         batched_h_inputs, batched_h_masks = self.heatmap_tower.preprocessing(heatmap_list)
 
         # cross attention module here 
-        for i in range(self.num_layers):    # TODO: need to re-check when layer > 1
+        for i in range(self.num_layers):
             original_v_inputs, original_v_masks = batched_v_inputs, batched_v_masks
             # (query: visual, key/value: heatmap)
             batched_v_inputs, batched_v_masks = self.h2v[i](query=batched_v_inputs, key=batched_h_inputs, value=batched_h_inputs, 

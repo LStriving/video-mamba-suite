@@ -17,3 +17,6 @@ ckpts/
 # tmp files
 tmp/
 *.pkl
+
+*.csv
+*result*
