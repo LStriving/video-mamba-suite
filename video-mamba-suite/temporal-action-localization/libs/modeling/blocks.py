@@ -10,7 +10,7 @@ from torch.nn.init import constant_
 from torch.nn.init import xavier_normal_
 from torch.nn.parameter import Parameter
 from torch.nn.functional import linear, softmax, dropout
-# from .weight_init import trunc_normal_
+from .weight_init import trunc_normal_
 from mamba_ssm.modules.mamba_simple import Mamba as ViM
 from mamba_ssm.modules.mamba_new import Mamba as DBM
 from mamba_ssm.modules.mamba_mulscale import Mamba as MDBM
@@ -1639,7 +1639,7 @@ class MaskMultiScaleMambaBlock(nn.Module):
         x_ = x.transpose(1,2)
         x_ = self.norm(x_)
         x_ = self.mamba(x_).transpose(1, 2)
-        
+
         x = x_ * mask.to(x.dtype)
 
         x  = res + self.drop_path(x * self.gamma)
