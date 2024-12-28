@@ -15,7 +15,7 @@ from mamba_ssm.modules.mamba_simple import Mamba as ViM
 from mamba_ssm.modules.mamba_new import Mamba as DBM
 from mamba_ssm.modules.mamba_mulscale import Mamba as MDBM
 from mamba_ssm.modules.mamba_vision_mulscale import Mamba as MViM
-from mamba_ssm.modules.mamba_v2m_mulscale import Mamba as MV2D
+from mamba_ssm.modules.mamba_v2m_mulscale import Mamba as MV2M
 Tensor = torch.Tensor
 from typing import Optional, Tuple
 import warnings
@@ -1584,8 +1584,8 @@ class MaskMultiScaleMambaBlock(nn.Module):
         elif use_mamba_type == 'mvim':
             self.mamba = MViM(n_embd, d_conv=kernel_size, bimamba_type="v2", pool_method=pool_method,
                               pool_size=n_ds_stride, use_fast_path=True)
-        elif use_mamba_type == 'mv2d':
-            self.mamba = MV2D(n_embd, d_conv=kernel_size, bimamba_type="2d", pool_method=pool_method,
+        elif use_mamba_type == 'mv2m':
+            self.mamba = MV2M(n_embd, d_conv=kernel_size, bimamba_type="2d", pool_method=pool_method,
                               pool_size=n_ds_stride, use_fast_path=True)
         else:
             raise NotImplementedError
@@ -2267,7 +2267,8 @@ if __name__ == '__main__':
     block = MaskMultiScaleMambaBlock(
         n_embd=256,
         n_ds_stride=4,
-        pool_method='2d-max'
+        pool_method='2d-max',
+        use_mamba_type='mv2m',
     )
     x = torch.rand(1, 256, 64)
     mask = torch.ones(1, 1, 64)

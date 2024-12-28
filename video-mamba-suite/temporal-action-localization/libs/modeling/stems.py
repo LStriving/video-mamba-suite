@@ -8,6 +8,8 @@ from torchvision.models.resnet import ResNet50_Weights
 
 from fairscale.nn.checkpoint import checkpoint_wrapper
 
+from libs.modeling.videomamba import VisionMamba
+
 from .models import register_video_stem, register_image_stem
 from .blocks import MaskMambaBlock, MaskedPoolingMHCA, MaskedPoolingMHCAv2, MaskMultiScaleMambaBlock
 from pytorch_i3d import InceptionI3d
@@ -68,25 +70,24 @@ class Projector(nn.Module):
     def forward(self, x):
         return self.proj(x)
 
-@register_image_stem('s-mvit')
-class SpatilMViT(nn.Module):
+
+class SpatialNet(nn.Module):
     def __init__(
-            self,
-            image_size: int,
-            patch_size: int,
-            in_channels: int,
-            embed_dim: int,
-            num_heads: int,
-            attn_dropout: float,
-            num_layers: int,
-            pool_size: int,
-            pool_mode: str,
-            act_checkpoint: bool,
-            abs_pos_embed: bool = False,
-            pos_drop: float = 0.0,
-            *args, 
-            **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        self,
+        image_size: int,
+        patch_size: int,
+        in_channels: int,
+        embed_dim: int,
+        num_layers: int,
+        pool_size: int,
+        pool_mode: str,
+        abs_pos_embed: bool = False,
+        pos_drop: float = 0.0,
+        act_checkpoint: bool = False,
+        *args, 
+        **kwargs
+    ):
+        super().__init__()
         self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
         self.patch_size = patch_size
         self.image_size = image_size
@@ -106,17 +107,6 @@ class SpatilMViT(nn.Module):
 
         self.n_layers = num_layers
         self.blocks = nn.ModuleList()
-        for _ in range(num_layers):
-            self.blocks.append(
-                self.wrapper(MaskedPoolingMHCA(
-                    n_embd=embed_dim,
-                    n_head=num_heads,
-                    attn_pdrop=attn_dropout,
-                    pool_qx_size=pool_size,
-                    pool_kv_size=pool_size,
-                    pool_method=pool_mode
-                ))
-            )
         
         num_patches = (image_size // patch_size) ** 2
         
@@ -159,8 +149,53 @@ class SpatilMViT(nn.Module):
         x = x.squeeze(-1)
         return x
 
+@register_image_stem('s-mvit')
+class SpatialMViT(SpatialNet):
+    def __init__(
+            self,
+            image_size: int,
+            patch_size: int,
+            in_channels: int,
+            embed_dim: int,
+            num_heads: int,
+            attn_dropout: float,
+            num_layers: int,
+            pool_size: int,
+            pool_mode: str,
+            abs_pos_embed: bool = False,
+            pos_drop: float = 0.0,
+            act_checkpoint: bool = False,
+            *args, 
+            **kwargs) -> None:
+        super().__init__(
+            image_size, 
+            patch_size, 
+            in_channels, 
+            embed_dim, 
+            num_layers, 
+            pool_size, 
+            pool_mode, 
+            abs_pos_embed,
+            pos_drop, 
+            act_checkpoint, 
+            *args, 
+            **kwargs
+        )
+        
+        for _ in range(num_layers):
+            self.blocks.append(
+                self.wrapper(MaskedPoolingMHCA(
+                    n_embd=embed_dim,
+                    n_head=num_heads,
+                    attn_pdrop=attn_dropout,
+                    pool_qx_size=pool_size,
+                    pool_kv_size=pool_size,
+                    pool_method=pool_mode
+                ))
+            )
+
 @register_image_stem('s-mvitV2')
-class SpatilMViT_v2(SpatilMViT):
+class SpatialMViT_v2(SpatialNet):
     def __init__(self, 
                  image_size: int, 
                  patch_size: int, 
@@ -171,18 +206,20 @@ class SpatilMViT_v2(SpatilMViT):
                  num_layers: int, 
                  pool_size: int, 
                  pool_mode: str, 
-                 act_checkpoint: bool, 
+                 abs_pos_embed: bool = False, 
+                 pos_drop: float = 0.0, 
+                 act_checkpoint: bool = False, 
                  *args, 
                  **kwargs) -> None:
         super().__init__(image_size, 
                          patch_size, 
                          in_channels, 
                          embed_dim, 
-                         num_heads, 
-                         attn_dropout, 
                          num_layers, 
                          pool_size, 
                          pool_mode, 
+                         abs_pos_embed,
+                         pos_drop,
                          act_checkpoint, 
                          *args, 
                          **kwargs)
@@ -202,7 +239,7 @@ class SpatilMViT_v2(SpatilMViT):
     
 
 @register_image_stem('MVMamba')
-class SpatilVMamba(SpatilMViT):
+class SpatialVMamba(SpatialNet):
     def __init__(
         self,
         drop_path_rate: float = 0.3,
@@ -226,10 +263,11 @@ class SpatilVMamba(SpatilMViT):
             )
 
 @register_image_stem('postpoolVMamba')
-class PostPoolVMamba(SpatilMViT):
+class PostPoolVMamba(SpatialNet):
     def __init__(
         self,
         drop_path_rate: float = 0.3,
+        mamab_type: str = 'dbm',
         *args, 
         **kwargs
     ):
@@ -242,6 +280,7 @@ class PostPoolVMamba(SpatilMViT):
                     n_ds_stride=self.pool_size,
                     pool_method=self.pool_mode,
                     drop_path_rate=drop_path_rate,
+                    use_mamba_type=mamab_type.lower()
                 ))
             )
 
@@ -301,8 +340,40 @@ class TCN(nn.Module):
         super().__init__()
         pass
 
+
+class TemporalNet(nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_layers: int,
+        pool_size: int,
+        pool_mode: str,
+        act_checkpoint: bool,
+        *args, 
+        **kwargs
+    ):
+        super().__init__()
+        self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
+        self.embed_dim = embed_dim
+        self.n_layers = num_layers
+        self.pool_size = pool_size
+        self.pool_mode = pool_mode
+        self.blocks = nn.ModuleList()
+    
+    def forward(self, x, mask=None):
+        # input shape: (B, C, T) desired output shape: (B, C) 
+        ## T is the frame length within a segment/window
+        if mask is None:
+            b, c, t = x.shape
+            mask = torch.ones((b,1,t), device=x.device)
+
+        for i in range(self.n_layers):
+            x, mask = self.blocks[i](x, mask)
+            
+        return x, mask
+
 @register_video_stem('mvit')
-class MViT(nn.Module):
+class MViT(TemporalNet):
     '''
         MViT video stem
         Refer to  https://arxiv.org/pdf/2104.11227
@@ -318,13 +389,14 @@ class MViT(nn.Module):
         act_checkpoint: bool,
         **kwargs
     ):
-        super().__init__()
-        self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
-        self.embed_dim = embed_dim
-        self.n_layers = num_layers
-        self.pool_size = pool_size
-        self.pool_mode = pool_mode
-        self.blocks = nn.ModuleList()
+        super().__init__(
+            embed_dim, 
+            num_layers, 
+            pool_size, 
+            pool_mode, 
+            act_checkpoint, 
+            **kwargs
+        )
         for _ in range(num_layers):
             self.blocks.append(
                 self.wrapper(MaskedPoolingMHCA(
@@ -337,20 +409,8 @@ class MViT(nn.Module):
                 ))
             )
 
-    def forward(self, x, mask=None):
-        # input shape: (B, C, T) desired output shape: (B, C) 
-        ## T is the frame length within a segment/window
-        if mask is None:
-            b, c, t = x.shape
-            mask = torch.ones((b,1,t), device=x.device)
-
-        for i in range(self.n_layers):
-            x, mask = self.blocks[i](x, mask)
-            
-        return x, mask
-
 @register_video_stem('MMamba')
-class MMamba(MViT):
+class MMamba(TemporalNet):
     def __init__(
         self,
         drop_path_rate: float = 0.3,
@@ -372,7 +432,7 @@ class MMamba(MViT):
             )
 
 @register_video_stem('postpoolMamba')
-class PostPoolMamba(MViT):
+class PostPoolMamba(TemporalNet):
     def __init__(
         self,
         drop_path_rate: float = 0.3,
@@ -392,7 +452,7 @@ class PostPoolMamba(MViT):
             )
 
 @register_video_stem('mvitV2')
-class MViT_v2(MViT):
+class MViT_v2(TemporalNet):
     def __init__(
         self,
         embed_dim: int,
@@ -406,8 +466,6 @@ class MViT_v2(MViT):
     ):
         super().__init__(
             embed_dim, 
-            num_heads, 
-            attn_dropout, 
             num_layers, 
             pool_size, 
             pool_mode, 
@@ -426,3 +484,65 @@ class MViT_v2(MViT):
                     pool_method=pool_mode
                 ))
             )
+
+class SpatialTemporalNet(nn.Module):
+    def __init__(
+        self,
+        image_size: int,
+        patch_size: int,
+        in_channels: int,
+        embed_dim: int,
+        num_layers: int,
+        pool_size: int,
+        pool_mode: str,
+        abs_pos_embed: bool,
+        pos_drop: float,
+        act_checkpoint: bool,
+        *args, 
+        **kwargs
+    ):
+        super().__init__()
+        # TODO: Implement the spatial temporal net
+
+@register_video_stem('video_mamba')
+class VideoMamba(VisionMamba):
+    '''
+        VideoMamba video stem
+    '''
+    def __init__(
+        self,
+        image_size: int,
+        patch_size: int,
+        num_layers: int,
+        embed_dim: int,
+        in_channels: int,
+        num_frames: int,
+        pos_drop_rate: float = 0.0,
+        drop_path_rate: float = 0.1,
+        rms_norm: bool = True,
+        fused_add_norm: bool = True,
+        feature_output_method: str = 'mean',
+        act_checkpoint: bool = True,
+        device: str = 'cuda',
+        **kwargs
+    ):
+        super().__init__(
+            image_size, 
+            patch_size, 
+            num_layers, 
+            embed_dim, 
+            in_channels, 
+            num_classes=1,
+            drop_rate=pos_drop_rate,
+            drop_path_rate=drop_path_rate,
+            num_frames=num_frames, 
+            rms_norm=rms_norm,
+            fused_add_norm=fused_add_norm,
+            feature_output_method = feature_output_method, 
+            use_checkpoint=act_checkpoint, 
+            checkpoint_num=num_layers if act_checkpoint else 0,
+            device=device,
+            **kwargs
+        )
+        self.head = nn.Identity()
+        

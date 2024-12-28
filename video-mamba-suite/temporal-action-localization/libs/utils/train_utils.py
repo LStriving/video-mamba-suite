@@ -11,6 +11,7 @@ import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
 import torch.nn as  nn
+from mamba_ssm.ops.triton.layernorm import RMSNorm
 
 from .lr_schedulers import LinearWarmupMultiStepLR, LinearWarmupCosineAnnealingLR
 from .postprocessing import postprocess_results
@@ -70,7 +71,8 @@ def make_optimizer(model, optimizer_config):
     no_decay = set()
     whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv1d, MaskedConv1D, 
                                 torch.nn.Linear, torch.nn.Parameter, torch.nn.Conv2d, torch.nn.Conv3d)
-    blacklist_weight_modules = (LayerNorm, torch.nn.GroupNorm, nn.LayerNorm, nn.BatchNorm3d, nn.MaxPool3d, nn.AdaptiveAvgPool3d)
+    blacklist_weight_modules = (LayerNorm, torch.nn.GroupNorm, nn.LayerNorm, RMSNorm,
+                                nn.BatchNorm3d, nn.MaxPool3d, nn.AdaptiveAvgPool3d)
     # TODO: filter with `required_grad`
     # loop over all modules / params
     for mn, m in model.named_modules():
@@ -85,6 +87,8 @@ def make_optimizer(model, optimizer_config):
             elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                 # weights of blacklist modules will NOT be weight decayed
                 no_decay.add(fpn)
+            elif pn.endswith('norm.weight'):
+                no_decay.add(fpn)
             elif pn.endswith('scale') and isinstance(m, (Scale, AffineDropPath)):
                 # corner case of our scale layer
                 no_decay.add(fpn)
@@ -96,6 +100,9 @@ def make_optimizer(model, optimizer_config):
             elif pn.endswith('A_log') or pn.endswith("D_b") or pn.endswith("D") or pn.endswith("A_b_log") or pn.endswith("forward_embed") or pn.endswith("backward_embed"):
                 # corner case for mamba
                 decay.add(fpn)
+            elif pn.endswith('pos_embed') or pn.endswith('cls_token') or pn.endswith('temporal_pos_embedding'):
+            # video mamba: "pos_embed", "cls_token", "temporal_pos_embedding"
+                no_decay.add(fpn)
             # TODO: Check
             elif pn.endswith('mask_matrix'):
                 # corner case for no decay lgte

@@ -872,6 +872,7 @@ class E2Eformer(PtTransformer):
         ## a network that enables different input size
         self.spatial_or_temporal_net = make_video_stem(
             video_stem,
+            device=self.device,
             **video_stem_cfg
         )
         
@@ -939,6 +940,10 @@ class E2Eformer(PtTransformer):
             feats = self.image_embed(feats) #NOTE: may face OOM
             ## revert back to B, T(vary) x C' (x H' x W')
             feats = torch.split(feats, [video['frame_num'] for video in video_list], dim=0)
+
+        no_slide = (video_list[0]['feat_num_frames'] == 1)
+        if no_slide:
+            return self.no_slide_forwad(video_list, feats)
         # sliding windows: B, T(vary) x C' (x H' x W')-> B, Windows_num(vary) x window_size(8) x C' (x H' x W')
         slided_feats = []
         for i, feat in enumerate(feats):
@@ -963,5 +968,21 @@ class E2Eformer(PtTransformer):
             assert video['feats'].shape[0] == self.input_dim
             video.pop('frame_num')
             video.pop('t')
+            new_video_list.append(video)
+        return new_video_list
+    
+    def no_slide_forwad(self, video_list, feats):
+        # only support video with the same frame number
+        # convert to B x t x C x H x W for batch embedding forward
+        feats = torch.stack(feats, dim=0).transpose(1, 2) # B, C, t, H, W
+        # forward the video network
+        feats = self.spatial_or_temporal_net(feats) # B, N, C'
+        feats = feats.transpose(1, 2)
+        # pooling to B, C', t
+        feats = F.adaptive_avg_pool1d(feats, video_list[0]['frame_num'])
+        # update video_list
+        new_video_list = []
+        for i, video in enumerate(video_list):
+            video['feats'] = feats[i]
             new_video_list.append(video)
         return new_video_list
