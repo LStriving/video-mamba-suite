@@ -410,7 +410,10 @@ def single_cls_map(args, cfg, label_dict, action):
         print(f"Error: No ckpt dir found for action {action}.")
         raise FileNotFoundError
     action_ckpt_dir = os.path.join(args.ckpt2, action_ckpt_dirs[0])
-    args.ckpt = get_best_pth_from_dir(action_ckpt_dir)
+    if args.last_epoch:
+        args.ckpt = get_best_pth_from_dir(action_ckpt_dir, 'epoch')
+    else:
+        args.ckpt = get_best_pth_from_dir(action_ckpt_dir)
     print(f"Using ckpt: {args.ckpt}")
     cfg['dataset']['desired_actions'] = [action]
     return action_id
@@ -732,11 +735,14 @@ def initI3ds(args):
     i3d_rgb.cuda()
     i3d_flow.cuda()
 
-def get_best_pth_from_dir(dir) -> str:
+def get_best_pth_from_dir(dir,key='performance') -> str:
     assert os.path.isdir(dir), "Directory does not exist!"
     ckpts = os.listdir(dir)
     ckpts = [ckpt for ckpt in ckpts if ".pth.tar" in ckpt]
-    ckpts = sorted(ckpts, key=lambda x: float(x.split(".pth.tar")[0].split("_")[-1]), reverse=True)
+    if key == 'performance':
+        ckpts = sorted(ckpts, key=lambda x: float(x.split(".pth.tar")[0].split("_")[-1]), reverse=True)
+    elif key == 'epoch':
+        ckpts = sorted(ckpts, key=lambda x: int(x.split(".pth.tar")[0].split("_")[-2]), reverse=True)
     return os.path.join(dir, ckpts[0])
 
 ################################################################################
@@ -810,6 +816,7 @@ if __name__ == '__main__':
     parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')
     parser.add_argument("--seg_duration", type=float, default=4.004, help='segment duration for stage 2')
     parser.add_argument("--dump_result", action='store_true', help='Whether to dump the final in cache dir')
+    parser.add_argument("--last_epoch", action='store_true', help='use last epoch to evaluate(default: best epoch)')
     args = parser.parse_args()
     main(args)
     # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt

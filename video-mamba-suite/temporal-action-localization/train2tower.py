@@ -98,7 +98,6 @@ def run(cfg, cfg2, args, action_label=None):
                 new_kv[k.replace("module.","")]=v
             model.load_state_dict(new_kv)
             print("=> loaded checkpoint '{:s}' for tower 1".format(args.backbone_1))
-            cfg['opt']['learning_rate'] *= 0.1 # reduce learning rate 
             del checkpoint
         else:
             print("=> no checkpoint found at '{}'".format(args.backbone_1))
@@ -111,10 +110,13 @@ def run(cfg, cfg2, args, action_label=None):
             new_kv = {}
             for k,v in checkpoint['state_dict_ema'].items():
                 new_kv[k.replace("module.","")]=v
-            model2.load_state_dict(new_kv)
+            if args.filter_backbone2:
+                new_kv = {k:v for k,v in new_kv.items() if args.filter_backbone2 in k}
+                model2.load_state_dict(new_kv, strict=False)
+            else:
+                model2.load_state_dict(new_kv)
             print("=> loaded checkpoint '{:s}' for tower 2".format(args.backbone_2))
             del checkpoint
-            cfg2['opt']['learning_rate'] *= 0.1 # reduce learning rate # not used
         else:
             print("=> no checkpoint found at '{}'".format(args.backbone_2))
 
@@ -126,7 +128,7 @@ def run(cfg, cfg2, args, action_label=None):
     if not args.cpu:
         model = nn.DataParallel(model, device_ids=cfg['devices'])
     # optimizer
-    optimizer = make_optimizer(model, cfg['opt'])
+    optimizer = make_optimizer(model, cfg['opt'], args.filter_backbone2, args.lower_ckpt_lr_rate)
     # schedule
     # TODO: check if this is correct (LAST batch)
     num_iters_per_epoch = len(train_loader) // cfg['loader']['accum_steps'] 
@@ -226,7 +228,7 @@ def run(cfg, cfg2, args, action_label=None):
             clip_grad_l2norm = cfg['train_cfg']['clip_grad_l2norm'],
             tb_writer=tb_writer,
             print_freq=args.print_freq,
-            accum_steps=cfg['loader']['accum_steps']
+            accum_step_num=cfg['loader']['accum_steps']
         )
         
         start_eval = 5 if max_epochs > 30 else 0
@@ -272,6 +274,33 @@ def run(cfg, cfg2, args, action_label=None):
             end = time.time()
             # print("All done! Total time: {:0.2f} sec".format(end - start))
             print(epoch,mAP)
+
+            if args.enable_branch_eval:
+                test_vws = [0.0, 1.0]
+                for vw in test_vws:
+                    model_eval.module.vw = vw
+                    print(f"Start testing model {args.tower_name} with vw={vw} ...")
+                    result = infer_one_epoch(
+                        val_loader,
+                        model_eval,
+                        -1,
+                        evaluator=det_eval,
+                        output_file=output_file,
+                        ext_score_file=cfg['test_cfg']['ext_score_file'],
+                        tb_writer=tb_writer,
+                        print_freq=999999 #args.print_freq
+                    )
+                    # remap action labels
+                    if remap:
+                        for label, train_label_id in train_label_dict.items():
+                            if label in eval_label_dict:
+                                result['label'][result['label'] == train_label_id] = eval_label_dict[label] + 1000
+                            else:
+                                print(f"Warning: {label} not found in eval_label_dict")
+                        result['label'] -= 1000
+                    _, mAP = det_eval.evaluate(result)
+                    if tb_writer is not None:
+                        tb_writer.add_scalar(f'validation/vw{vw}_mAP', mAP, epoch)
 
             save_states = {
                 'epoch': epoch,
@@ -402,9 +431,14 @@ if __name__ == '__main__':
                         help='path to a checkpoint for tower 1(default: none)')
     parser.add_argument('--backbone_2', default=None, type=str, metavar='PATH',
                         help='path to a checkpoint for tower 2(default: none)')
-    parser.add_argument('--tower_name', default='Convfusion', type=str,
-                        help='name of the two-tower model (default: Convfusion)')
+    parser.add_argument('--tower_name', default='DINOAttnEarlyFusion', type=str,
+                        help='name of the two-tower model (default: DINOAttnEarlyFusion)')
     parser.add_argument('--cpu', action='store_true',
                         help='use cpu instead of gpu')
+    parser.add_argument('--enable_branch_eval', action='store_true',
+                        help='enable evaluation for each branch')
+    parser.add_argument('--filter_backbone2', default=None, type=str,
+                        help='filter backbone 2')
+    parser.add_argument("--lower_ckpt_lr_rate", type=float, default=1.0, help="lr ratio for the ckpt part (default: 1.0)")
     args = parser.parse_args()
     main(args)

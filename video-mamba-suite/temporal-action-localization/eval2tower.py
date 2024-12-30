@@ -87,7 +87,7 @@ def run2tower(cfg, cfg2, args, action_label=None):
     del checkpoint
 
     """5. Test the model"""
-    print("\nStart inferring model {:s} ...".format(cfg['model_name']))
+    print(f"\nStart inferring model {cfg['model_name']} and {cfg2['model_name']} ...")
 
     
     train_label_dict = val_dataset.label_dict
@@ -240,5 +240,6 @@ if __name__ == '__main__':
     parser.add_argument('--image_size', type=int, default=128, help='size of image')
     parser.add_argument('--heatmap_sigma', type=float, default=4, help='Heatmap sigma (default 4)')
     parser.add_argument("--dump_result", action='store_true')
+    parser.add_argument("--last_epoch", action='store_true', help="use the last epoch to evaluate (default: best epoch)")
     args = parser.parse_args()
     main(args)
