@@ -10,9 +10,10 @@ from torch.nn.init import constant_
 from torch.nn.init import xavier_normal_
 from torch.nn.parameter import Parameter
 from torch.nn.functional import linear, softmax, dropout
-from .weight_init import trunc_normal_
+# from .weight_init import trunc_normal_
 from mamba_ssm.modules.mamba_simple import Mamba as ViM
 from mamba_ssm.modules.mamba_new import Mamba as DBM
+from mamba_ssm.modules.mamba_v2m import Mamba as V2M
 from mamba_ssm.modules.mamba_mulscale import Mamba as MDBM
 from mamba_ssm.modules.mamba_vision_mulscale import Mamba as MViM
 from mamba_ssm.modules.mamba_v2m_mulscale import Mamba as MV2M
@@ -1294,6 +1295,53 @@ class PreNormDINOTransformerBlock(PreNormCrossTransformerBlock):
         out = self.pool_skip(query) * out_mask_float + self.drop_path_attn(out * self.gamma)
         return out, out_mask
 
+class MaskCrossMamba(nn.Module):
+    '''
+    A wrapper for the cross mamba attention module with masking
+    '''
+    def __init__(
+        self,
+        n_embd,                # dimension of the input features
+        kv_embd,               # dimension of the key and value features
+    ):
+        super().__init__()
+        self.cross_mamba = CrossMamba(n_embd, kv_embd) #TODO: implement this (more init params)
+
+    def forward(self, query, value, query_mask, kv_mask):
+        query = query.transpose(1, 2)
+        value = value.transpose(1, 2)
+        out = self.cross_mamba(query, value).transpose(1, 2) 
+        out_mask = query_mask & kv_mask # NOTE: kv_mask is the same as query_mask, the implementation is wrong probably
+        out = out* out_mask.to(out.dtype)
+        return out, out_mask
+
+
+class PreNormCrossMambaBlock(nn.Module):
+    def __init__(
+        self,
+        n_embd,                # dimension of the input features
+        kv_embd,               # dimension of the key and value features
+        n_out=None,            # output dimension, if None, set to input dim
+        init_value=1e-1,       # initial value for the scale
+        path_pdrop=0.0,        # drop path rate
+    ):
+        super().__init__()
+        self.ln1 = LayerNorm(n_embd)
+        self.ln2 = LayerNorm(kv_embd)
+        self.gamma = nn.Parameter(torch.ones([1, n_embd, 1]) * init_value, requires_grad=True)
+        # drop path
+        if path_pdrop > 0.0:
+            self.drop_path_attn = AffineDropPath(n_embd, drop_prob = path_pdrop)
+        else:
+            self.drop_path_attn = nn.Identity()
+        self.cross_mamba = MaskCrossMamba(n_embd, kv_embd) #TODO: MORE init params
+
+    def forward(self, query, key, value, query_mask, kv_mask, pos_embd=None):
+        out, out_mask = self.cross_mamba(self.ln1(query), self.ln2(key), self.ln2(value), query_mask, kv_mask)
+        out_mask_float = out_mask.to(out.dtype)
+        out = self.drop_path_attn(out * self.gamma) + query * out_mask_float
+        return out, out_mask
+
 class MulScaleTransformerBlock(TransformerBlock):
     def __init__(
         self,
@@ -1343,7 +1391,6 @@ class MulScaleTransformerBlock(TransformerBlock):
         if pos_embd is not None:
             out += pos_embd * out_mask_float
         return out, out_mask
-
 
 class ConvBlock(nn.Module):
     """
@@ -1521,6 +1568,9 @@ class MaskMambaBlock(nn.Module):
         elif use_mamba_type == "vim":
             # vim
             self.mamba = ViM(n_embd, d_conv=kernel_size, bimamba_type="v2", use_fast_path=True)
+        elif use_mamba_type == "v2m":
+            # v2m
+            self.mamba = V2M(n_embd, d_conv=kernel_size, bimamba_type="2d", use_fast_path=True)
         else:
             raise NotImplementedError
         if n_ds_stride > 1:
@@ -2267,7 +2317,7 @@ if __name__ == '__main__':
     block = MaskMultiScaleMambaBlock(
         n_embd=256,
         n_ds_stride=4,
-        pool_method='2d-max',
+        pool_method='max',
         use_mamba_type='mv2m',
     )
     x = torch.rand(1, 256, 64)

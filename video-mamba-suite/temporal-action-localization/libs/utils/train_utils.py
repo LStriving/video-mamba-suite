@@ -61,7 +61,7 @@ def print_model_params(model):
     return
 
 
-def make_optimizer(model, optimizer_config):
+def make_optimizer(model, optimizer_config, pretrained_name=None, pretrained_lr_ratio=1.0):
     """create optimizer
     return a supported optimizer
     """
@@ -125,6 +125,20 @@ def make_optimizer(model, optimizer_config):
         {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": optimizer_config['weight_decay']},
         {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
     ]
+    if pretrained_name is not None:
+        # re-create the optimizer for the pretrained model
+        optim_groups = [
+            {"params": [param_dict[pn] for pn in sorted(list(decay)) if pretrained_name not in pn], 
+             "weight_decay": optimizer_config['weight_decay']},
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay)) if pretrained_name not in pn], 
+             "weight_decay": 0.0},
+            {"params": [param_dict[pn] for pn in sorted(list(decay)) if pretrained_name in pn], 
+             "weight_decay": optimizer_config['weight_decay'] * pretrained_lr_ratio, 
+             "lr": optimizer_config['learning_rate'] * pretrained_lr_ratio},
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay)) if pretrained_name in pn], 
+             "weight_decay": 0.0, 
+             "lr": optimizer_config['learning_rate'] * pretrained_lr_ratio},
+        ]
 
     if optimizer_config["type"] == "SGD":
         optimizer = optim.SGD(

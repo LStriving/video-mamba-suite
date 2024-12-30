@@ -5,7 +5,7 @@ from fairscale.nn.checkpoint import checkpoint_wrapper
 
 from .meta_archs import PtTransformerClsHead, PtTransformerRegHead
 from .models import register_two_tower, make_neck
-from .blocks import PostNormCrossTransformerBlock, PreNormCrossTransformerBlock, PreNormDINOTransformerBlock
+from .blocks import PostNormCrossTransformerBlock, PreNormCrossMambaBlock, PreNormCrossTransformerBlock, PreNormDINOTransformerBlock
 
 
 class TwoTower(nn.Module):
@@ -273,10 +273,9 @@ class LogitAvg_List(TwoTower):
         fpn_masks = [x.squeeze(1) for x in fpn_masks]
         return out_cls_logits, out_offsets, fpn_masks, points
 
-@register_two_tower('CrossAttnEarlyFusion')
-class CrossAttnEarlyFusion(TwoTower):
+class CrossBlockEarlyFusion(TwoTower):
     """
-    Add cross attention module for both visual and heatmap towers
+    Add cross module for both visual and heatmap towers
     The module is added before the (actionmamba or actionformer) backbone
     """
     def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
@@ -286,7 +285,6 @@ class CrossAttnEarlyFusion(TwoTower):
         self.num_layers = num_layers
         v_input_dim = cfg1['model']['input_dim']
         h_input_dim = cfg2['model']['input_dim']
-        print(f"CrossAttnEarlyFusion: vw={vw}, num_layers={num_layers}")
         print(f"v_input_dim={v_input_dim}, h_input_dim={h_input_dim}")
 
         self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
@@ -313,6 +311,8 @@ class CrossAttnEarlyFusion(TwoTower):
             h_losses = self.heatmap_tower.train_forward(heatmap_list, *h_out)
             losses = v_losses
             losses['final_loss'] += h_losses['final_loss']
+            losses['heamap_cls_loss'] = h_losses['cls_loss']
+            losses['heamap_reg_loss'] = h_losses['reg_loss']
             return losses
         else:
             self.visual_tower.training = False
@@ -353,9 +353,37 @@ class CrossAttnEarlyFusion(TwoTower):
         
         return (v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points), \
                 (h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points)
+
+
+@register_two_tower('CrossAttnEarlyFusion')
+class CrossAttnEarlyFusion(CrossBlockEarlyFusion):
+    """
+    Add cross attention module for both visual and heatmap towers
+    The module is added before the (actionmamba or actionformer) backbone
+    """
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2)
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"CrossAttnEarlyFusion: vw={vw}, num_layers={num_layers}")
+
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PostNormCrossTransformerBlock(
+                v_input_dim,
+                h_input_dim,
+                cfg1['model']['n_head'],
+            )) for _ in range(num_layers)]
+        )
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PostNormCrossTransformerBlock(
+                h_input_dim,
+                v_input_dim,
+                cfg2['model']['n_head'],
+            )) for _ in range(num_layers)]
+        )
     
 @register_two_tower('CrossAttnEarlyFusion-PreNorm')
-class CrossAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
+class CrossAttnEarlyFusionPreNorm(CrossBlockEarlyFusion):
     def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
         super().__init__(visual_tower, heatmap_tower, cfg1, cfg2, vw, num_layers, act_checkpoint)
         v_input_dim = cfg1['model']['input_dim']
@@ -379,13 +407,12 @@ class CrossAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
         )
 
 @register_two_tower('DINOAttnEarlyFusion')
-class DINOAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
+class DINOAttnEarlyFusionPreNorm(CrossBlockEarlyFusion):
     def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
         super().__init__(visual_tower, heatmap_tower, cfg1, cfg2, vw, num_layers, act_checkpoint)
         v_input_dim = cfg1['model']['input_dim']
         h_input_dim = cfg2['model']['input_dim']
         print(f"DINOAttnEarlyFusion: vw={vw}, num_layers={num_layers}")
-        print(f"v_input_dim={v_input_dim}, h_input_dim={h_input_dim}")
 
         self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
             [self.wrapper(PreNormDINOTransformerBlock(
@@ -405,3 +432,62 @@ class DINOAttnEarlyFusionPreNorm(CrossAttnEarlyFusion):
                 init_value=cfg1['two_tower']['init_value']
             )) for _ in range(num_layers)]
         )
+
+@register_two_tower('CrossMambaEarlyFusion')
+class CrossMambaEarlyFusion(CrossBlockEarlyFusion):
+    """
+    Add cross mamba module for both visual and heatmap towers
+    The module is added before the (actionmamba or actionformer) backbone
+    """
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.7, num_layers=3, act_checkpoint=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2)
+        self.vw = vw
+        self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
+        self.num_layers = num_layers
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"CrossMambaEarlyFusion: vw={vw}, num_layers={num_layers}")
+
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PreNormCrossMambaBlock(
+                v_input_dim,
+                h_input_dim,
+                init_value=cfg1['two_tower']['init_value'],
+                path_pdrop=0.1,
+            )) for _ in range(num_layers)]
+        )
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PreNormCrossMambaBlock(
+                h_input_dim,
+                v_input_dim,
+                init_value=cfg1['two_tower']['init_value'],
+                path_pdrop=0.1,
+            )) for _ in range(num_layers)]
+        )
+
+    def fused_logit_foward(self, video_list, heatmap_list):
+        if getattr(self.visual_tower, 'pre_forward', None):
+            video_list = self.visual_tower.pre_forward(video_list)
+        if getattr(self.heatmap_tower, 'pre_forward', None):
+            heatmap_list = self.heatmap_tower.pre_forward(heatmap_list)
+        batched_v_inputs, batched_v_masks = self.visual_tower.preprocessing(video_list)
+        batched_h_inputs, batched_h_masks = self.heatmap_tower.preprocessing(heatmap_list)
+
+        # cross attention module here 
+        for i in range(self.num_layers):
+            original_v_inputs, original_v_masks = batched_v_inputs, batched_v_masks
+            # (query: visual, key/value: heatmap)
+            batched_v_inputs, batched_v_masks = self.h2v[i](query=batched_v_inputs, value=batched_h_inputs, 
+                                                            query_mask=batched_v_masks, kv_mask=batched_h_masks)
+            # (query: heatmap, key/value: visual)
+            batched_h_inputs, batched_h_masks = self.v2h[i](query=batched_h_inputs, value=original_v_inputs, 
+                                                            query_mask=original_v_masks, kv_mask=original_v_masks)
+        
+        # forward the network (backbone -> neck -> heads)
+        v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points \
+            = self.visual_tower._logit_processed_input_forward(batched_v_inputs, batched_v_masks)
+        h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points \
+            = self.heatmap_tower._logit_processed_input_forward(batched_h_inputs, batched_h_masks)
+        
+        return (v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points), \
+                (h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points)
