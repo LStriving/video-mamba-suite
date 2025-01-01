@@ -36,7 +36,7 @@ def run(cfg, cfg2, args, action_label=None):
     args.start_epoch = 0
     # prep for output folder (based on time stamp)
     if not os.path.exists(cfg['output_folder']):
-        os.makedirs(cfg['output_folder'])
+        os.makedirs(cfg['output_folder'], exist_ok=True)
     cfg_filename = os.path.basename(args.config).replace('.yaml', '')
     cfg2_filename = os.path.basename(args.config2).replace('.yaml', '')
     if len(args.output) == 0:

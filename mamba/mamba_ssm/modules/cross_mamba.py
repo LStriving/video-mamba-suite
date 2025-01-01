@@ -31,6 +31,47 @@ except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
 
+class eca_layer(nn.Module):
+    """Constructs a ECA module.
+
+    Args:
+        channel: Number of channels of the input feature map
+        k_size: Adaptive selection of kernel size
+    """
+    def __init__(self, channel, k_size=3):
+        super(eca_layer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False) 
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # feature descriptor on the global spatial information
+        y = self.avg_pool(x)
+        # Two different branches of ECA module
+        y = self.conv(y.transpose(-1, -2)).transpose(-1, -2)
+
+        # Multi-scale information fusion
+        y = self.sigmoid(y)
+
+        return x * y.expand_as(x)
+
+class SELayer(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SELayer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1)
+        return x * y.expand_as(x)
+
 class Mamba(nn.Module):
     """
     Cross Mamba Based on DBM (value dim mapping to query dim)
@@ -57,6 +98,7 @@ class Mamba(nn.Module):
         init_layer_scale=None,
         channel_agg=False,  # Whether to use channel aggregation
         init_value=1e-5,    # Initial value for gamma when using channel aggregation
+        ca_implement_type='ca', # 'ca'/'eca'/'se'/'ca-add'
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -128,17 +170,24 @@ class Mamba(nn.Module):
 
         self.channel_agg = channel_agg
         if self.channel_agg:
-            self.gamma = nn.Parameter(
-                init_value * torch.ones((1, self.d_inner * 2, 1)),
-                requires_grad=True,
-            )
-            self.decompose_act = nn.SiLU()
-            self.decompose = nn.Conv1d(
-                in_channels=self.d_inner * 2,
-                out_channels=1,
-                kernel_size=1,
-                **factory_kwargs,
-            )
+            assert ca_implement_type in ['ca', 'eca', 'se', 'ca-add']
+            self.ca_implement_type = ca_implement_type
+            if ca_implement_type in ['ca', 'ca-add']:
+                self.gamma = nn.Parameter(
+                    init_value * torch.ones((1, self.d_inner * 2, 1)),
+                    requires_grad=True,
+                )
+                self.decompose_act = nn.SiLU()
+                self.decompose = nn.Conv1d(
+                    in_channels=self.d_inner * 2,
+                    out_channels=1,
+                    kernel_size=1,
+                    **factory_kwargs,
+                )
+            elif ca_implement_type == 'eca':
+                self.enhance = eca_layer(channel=self.d_inner * 2)
+            elif ca_implement_type == 'se':
+                self.enhance = SELayer(channel=self.d_inner * 2)
         self.out_proj = nn.Linear(self.d_inner * 2, self.d_model, bias=bias, **factory_kwargs)
 
     def python_mamba_inner_fn_no_out_proj(self, xz, A, conv_state, ssm_state, seqlen, conv1d, x_proj, dt_proj, D, use_pytorch_conv=False):
@@ -246,7 +295,12 @@ class Mamba(nn.Module):
             out = out.chunk(2)
             out = torch.cat([out[0], out[1].flip([-1])], dim=1) # (B, 2D, L)
             if self.channel_agg:
-                out = out + self.gamma * (out - self.decompose_act(self.decompose(out)))
+                if self.ca_implement_type == 'ca':
+                    out = out + self.gamma * (out - self.decompose_act(self.decompose(out)))
+                elif self.ca_implement_type == 'ca-add':
+                    out = out + self.gamma * (out + self.decompose_act(self.decompose(out)))
+                elif self.ca_implement_type in ['eca', 'se']:
+                    out = self.enhance(out)
             out = F.linear(rearrange(out, "b d l -> b l d"), self.out_proj.weight, self.out_proj.bias)
         else:
             assert False, "Not implemented"
@@ -456,4 +510,4 @@ if __name__ == "__main__":
     
     
     # print(hidden_states.shape)
-    ...
+    print("Mamba")

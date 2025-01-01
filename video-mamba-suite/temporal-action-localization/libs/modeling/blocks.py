@@ -1306,9 +1306,11 @@ class MaskCrossMamba(nn.Module):
         kv_embd,               # dimension of the key and value features
         kernel_size=4,         # conv kernel size
         channel_agg=False,    # whether to use channel aggregation 
+        ca_type='ca',         # type of channel aggregation
     ):
         super().__init__()
-        self.cross_mamba = CrossMamba(n_embd, kv_embd, expand=1, d_conv=kernel_size, use_fast_path=True, channel_agg=channel_agg)
+        self.cross_mamba = CrossMamba(n_embd, kv_embd, expand=1, d_conv=kernel_size, 
+                                      use_fast_path=True, channel_agg=channel_agg, ca_implement_type=ca_type)
     def forward(self, query, value, query_mask, kv_mask):
         query = query.transpose(1, 2)
         value = value.transpose(1, 2)
@@ -1327,6 +1329,7 @@ class PreNormCrossMambaBlock(nn.Module):
         init_value=1e-1,       # initial value for the scale
         path_pdrop=0.0,        # drop path rate
         channel_agg=False,     # whether to use channel aggregation
+        ca_type='ca',          # type of channel aggregation
     ):
         super().__init__()
         self.ln1 = LayerNorm(n_embd)
@@ -1337,7 +1340,7 @@ class PreNormCrossMambaBlock(nn.Module):
             self.drop_path_attn = AffineDropPath(n_embd, drop_prob = path_pdrop)
         else:
             self.drop_path_attn = nn.Identity()
-        self.cross_mamba = MaskCrossMamba(n_embd, kv_embd, channel_agg=channel_agg) #TODO: MORE init params
+        self.cross_mamba = MaskCrossMamba(n_embd, kv_embd, channel_agg=channel_agg, ca_type=ca_type)
 
     def forward(self, query, value, query_mask, kv_mask, pos_embd=None):
         out, out_mask = self.cross_mamba(self.ln1(query), self.ln2(value), query_mask, kv_mask)

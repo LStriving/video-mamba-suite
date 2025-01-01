@@ -455,6 +455,7 @@ class CrossMambaEarlyFusion(CrossBlockEarlyFusion):
                 init_value=cfg1['two_tower']['init_value'],
                 path_pdrop=0.1,
                 channel_agg=cfg1['two_tower']['channel_agg'],
+                ca_type=cfg1['two_tower']['ca_type'],
             )) for _ in range(num_layers)]
         )
         self.v2h = nn.ModuleList(
@@ -464,6 +465,7 @@ class CrossMambaEarlyFusion(CrossBlockEarlyFusion):
                 init_value=cfg1['two_tower']['init_value'],
                 path_pdrop=0.1,
                 channel_agg=cfg1['two_tower']['channel_agg'],
+                ca_type=cfg1['two_tower']['ca_type'],
             )) for _ in range(num_layers)]
         )
 
