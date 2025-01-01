@@ -10,13 +10,14 @@ from torch.nn.init import constant_
 from torch.nn.init import xavier_normal_
 from torch.nn.parameter import Parameter
 from torch.nn.functional import linear, softmax, dropout
-# from .weight_init import trunc_normal_
+from .weight_init import trunc_normal_
 from mamba_ssm.modules.mamba_simple import Mamba as ViM
 from mamba_ssm.modules.mamba_new import Mamba as DBM
 from mamba_ssm.modules.mamba_v2m import Mamba as V2M
 from mamba_ssm.modules.mamba_mulscale import Mamba as MDBM
 from mamba_ssm.modules.mamba_vision_mulscale import Mamba as MViM
 from mamba_ssm.modules.mamba_v2m_mulscale import Mamba as MV2M
+from mamba_ssm.modules.cross_mamba import Mamba as CrossMamba
 Tensor = torch.Tensor
 from typing import Optional, Tuple
 import warnings
@@ -1303,10 +1304,11 @@ class MaskCrossMamba(nn.Module):
         self,
         n_embd,                # dimension of the input features
         kv_embd,               # dimension of the key and value features
+        kernel_size=4,         # conv kernel size
+        channel_agg=False,    # whether to use channel aggregation 
     ):
         super().__init__()
-        self.cross_mamba = CrossMamba(n_embd, kv_embd) #TODO: implement this (more init params)
-
+        self.cross_mamba = CrossMamba(n_embd, kv_embd, expand=1, d_conv=kernel_size, use_fast_path=True, channel_agg=channel_agg)
     def forward(self, query, value, query_mask, kv_mask):
         query = query.transpose(1, 2)
         value = value.transpose(1, 2)
@@ -1324,6 +1326,7 @@ class PreNormCrossMambaBlock(nn.Module):
         n_out=None,            # output dimension, if None, set to input dim
         init_value=1e-1,       # initial value for the scale
         path_pdrop=0.0,        # drop path rate
+        channel_agg=False,     # whether to use channel aggregation
     ):
         super().__init__()
         self.ln1 = LayerNorm(n_embd)
@@ -1334,10 +1337,10 @@ class PreNormCrossMambaBlock(nn.Module):
             self.drop_path_attn = AffineDropPath(n_embd, drop_prob = path_pdrop)
         else:
             self.drop_path_attn = nn.Identity()
-        self.cross_mamba = MaskCrossMamba(n_embd, kv_embd) #TODO: MORE init params
+        self.cross_mamba = MaskCrossMamba(n_embd, kv_embd, channel_agg=channel_agg) #TODO: MORE init params
 
-    def forward(self, query, key, value, query_mask, kv_mask, pos_embd=None):
-        out, out_mask = self.cross_mamba(self.ln1(query), self.ln2(key), self.ln2(value), query_mask, kv_mask)
+    def forward(self, query, value, query_mask, kv_mask, pos_embd=None):
+        out, out_mask = self.cross_mamba(self.ln1(query), self.ln2(value), query_mask, kv_mask)
         out_mask_float = out_mask.to(out.dtype)
         out = self.drop_path_attn(out * self.gamma) + query * out_mask_float
         return out, out_mask
