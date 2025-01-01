@@ -189,9 +189,9 @@ class Mamba(nn.Module):
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
 
         
-        xz_f, xz_b = torch.chunk(xz, 2, dim=1)  # (B, D, L)
+        xz_f, xz_b = torch.chunk(xz, 2, dim=1)  # (B, 4D, L) => 2 * (B, 2D, L)
         xz_b = xz_b.flip([-1])
-        xz = torch.cat([xz_f, xz_b], dim=0)
+        xz = torch.cat([xz_f, xz_b], dim=0) # (2B, 2D, L)
         
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
@@ -379,46 +379,11 @@ class Block(nn.Module):
 
 if __name__ == "__main__":
     # Test Mamba
-    import torch.autograd.profiler as profiler
-    import time
     dim = 1024
     frame = 128
     bs = 1
     n_head = 16
     model = Mamba(dim).cuda().to(torch.float16)
-    from flash_attn.modules.mha import MHA
-    from flash_attn.modules.mlp import Mlp
-    from avion.models.transformer import ResidualAttentionBlock
-    
-    
-    attn = ResidualAttentionBlock(dim, n_head, use_flash_attn=True).cuda().to(torch.float16)
-    
-    
-    
-    # param
-    num_params = sum(p.numel() for p in model.parameters())
-
-    hidden_states = torch.rand(bs, frame*14*14, dim).cuda().to(torch.float16)
-
-    
-    print("mamba")
-    for i in range(100):
-        start = time.time()
-        with torch.no_grad():
-            out = model(hidden_states)
-        torch.cuda.synchronize()
-        print((time.time()-start) * 1000, "ms")
-    
-    print("flash attn")
-    for i in range(100):
-        start = time.time()
-        with torch.no_grad():
-            out = attn(hidden_states)
-        torch.cuda.synchronize()
-        print((time.time()-start)*1000, "ms")
-
-    
-    
-    print(hidden_states.shape)
-    
+    x = torch.randn(bs, frame, dim).cuda().to(torch.float16)
+    out = model(x)
     

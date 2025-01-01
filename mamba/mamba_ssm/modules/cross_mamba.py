@@ -32,6 +32,9 @@ except ImportError:
 
 
 class Mamba(nn.Module):
+    """
+    Cross Mamba Based on DBM (value dim mapping to query dim)
+    """
     def __init__(
         self,
         d_model,
@@ -52,6 +55,8 @@ class Mamba(nn.Module):
         device=None,
         dtype=None,
         init_layer_scale=None,
+        channel_agg=False,  # Whether to use channel aggregation
+        init_value=1e-5,    # Initial value for gamma when using channel aggregation
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -65,7 +70,8 @@ class Mamba(nn.Module):
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
 
-        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2 * 2 , bias=bias, **factory_kwargs)
+        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs) # query (* 2 means forward and backward)
+        self.v_in_proj = nn.Linear(self.d_value, self.d_inner * 2, bias=bias, **factory_kwargs) # value (* 2 means forward and backward)
 
         self.conv1d = nn.Conv1d(
             in_channels=self.d_inner,
@@ -120,7 +126,19 @@ class Mamba(nn.Module):
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
-
+        self.channel_agg = channel_agg
+        if self.channel_agg:
+            self.gamma = nn.Parameter(
+                init_value * torch.ones((1, self.d_inner * 2, 1)),
+                requires_grad=True,
+            )
+            self.decompose_act = nn.SiLU()
+            self.decompose = nn.Conv1d(
+                in_channels=self.d_inner * 2,
+                out_channels=1,
+                kernel_size=1,
+                **factory_kwargs,
+            )
         self.out_proj = nn.Linear(self.d_inner * 2, self.d_model, bias=bias, **factory_kwargs)
 
     def python_mamba_inner_fn_no_out_proj(self, xz, A, conv_state, ssm_state, seqlen, conv1d, x_proj, dt_proj, D, use_pytorch_conv=False):
@@ -184,18 +202,30 @@ class Mamba(nn.Module):
                 out, _, _ = self.step(query_states, conv_state, ssm_state)
                 return out
         # We do matmul and transpose BLH -> HBL at the same time
-        xz = rearrange(
+        x = rearrange(
             self.in_proj.weight @ rearrange(query_states, "b l d -> d (b l)"),
             "d (b l) -> b d l",
             l=seqlen,
         )
         if self.in_proj.bias is not None:
-            xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+            x = x + rearrange(self.in_proj.bias.to(dtype=x.dtype), "d -> d 1")
 
-        
-        xz_f, xz_b = torch.chunk(xz, 2, dim=1)  # (B, D, L)
-        xz_b = xz_b.flip([-1])
-        xz = torch.cat([xz_f, xz_b], dim=0)
+        z = rearrange(
+            self.v_in_proj.weight @ rearrange(value_states, "b l d -> d (b l)"),
+            "d (b l) -> b d l",
+            l=seqlen,
+        )
+        if self.v_in_proj.bias is not None:
+            z = z + rearrange(self.v_in_proj.bias.to(dtype=z.dtype), "d -> d 1")
+
+        x_f, x_b = torch.chunk(x, 2, dim=1)  # (B, 2D, L) => (B, D, L)
+        x_b = x_b.flip([-1])
+        z_f, z_b = torch.chunk(z, 2, dim=1)  # (B, 2D, L) => (B, D, L)
+        z_b = z_b.flip([-1])
+
+        x = torch.cat([x_f, x_b], dim=0) # (2B, D, L)
+        z = torch.cat([z_f, z_b], dim=0) # (2B, D, L)
+        xz = torch.cat([x, z], dim=1)    # (2B, 2D, L)
         
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
@@ -214,7 +244,9 @@ class Mamba(nn.Module):
                     delta_softplus=True,
                 )
             out = out.chunk(2)
-            out = torch.cat([out[0], out[1].flip([-1])], dim=1)
+            out = torch.cat([out[0], out[1].flip([-1])], dim=1) # (B, 2D, L)
+            if self.channel_agg:
+                out = out + self.gamma * (out - self.decompose_act(self.decompose(out)))
             out = F.linear(rearrange(out, "b d l -> b l d"), self.out_proj.weight, self.out_proj.bias)
         else:
             assert False, "Not implemented"
@@ -383,46 +415,45 @@ class Block(nn.Module):
 
 if __name__ == "__main__":
     # Test Mamba
-    import torch.autograd.profiler as profiler
-    import time
-    dim = 1024
-    frame = 128
-    bs = 1
-    n_head = 16
-    model = Mamba(dim).cuda().to(torch.float16)
-    from flash_attn.modules.mha import MHA
-    from flash_attn.modules.mlp import Mlp
-    from avion.models.transformer import ResidualAttentionBlock
+    # import torch.autograd.profiler as profiler
+    # import time
+    # dim = 1024
+    # frame = 128
+    # bs = 1
+    # n_head = 16
+    # model = Mamba(dim).cuda().to(torch.float16)
+    # from flash_attn.modules.mha import MHA
+    # from flash_attn.modules.mlp import Mlp
+    # from avion.models.transformer import ResidualAttentionBlock
     
     
-    attn = ResidualAttentionBlock(dim, n_head, use_flash_attn=True).cuda().to(torch.float16)
+    # attn = ResidualAttentionBlock(dim, n_head, use_flash_attn=True).cuda().to(torch.float16)
     
     
     
-    # param
-    num_params = sum(p.numel() for p in model.parameters())
+    # # param
+    # num_params = sum(p.numel() for p in model.parameters())
 
-    hidden_states = torch.rand(bs, frame*14*14, dim).cuda().to(torch.float16)
-
-    
-    print("mamba")
-    for i in range(100):
-        start = time.time()
-        with torch.no_grad():
-            out = model(hidden_states)
-        torch.cuda.synchronize()
-        print((time.time()-start) * 1000, "ms")
-    
-    print("flash attn")
-    for i in range(100):
-        start = time.time()
-        with torch.no_grad():
-            out = attn(hidden_states)
-        torch.cuda.synchronize()
-        print((time.time()-start)*1000, "ms")
+    # hidden_states = torch.rand(bs, frame*14*14, dim).cuda().to(torch.float16)
 
     
+    # print("mamba")
+    # for i in range(100):
+    #     start = time.time()
+    #     with torch.no_grad():
+    #         out = model(hidden_states)
+    #     torch.cuda.synchronize()
+    #     print((time.time()-start) * 1000, "ms")
     
-    print(hidden_states.shape)
+    # print("flash attn")
+    # for i in range(100):
+    #     start = time.time()
+    #     with torch.no_grad():
+    #         out = attn(hidden_states)
+    #     torch.cuda.synchronize()
+    #     print((time.time()-start)*1000, "ms")
+
     
     
+    # print(hidden_states.shape)
+    ...
