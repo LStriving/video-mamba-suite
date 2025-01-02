@@ -145,6 +145,7 @@ DEFAULTS = {
         "include_ori_loss": False,
         "vws": None,
         "init_value": 1e-1,
+        "ca_type": 'ca',
     },
     "image_stem":{
 

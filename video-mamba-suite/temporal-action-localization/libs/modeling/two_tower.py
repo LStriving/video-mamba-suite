@@ -495,3 +495,65 @@ class CrossMambaEarlyFusion(CrossBlockEarlyFusion):
         
         return (v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points), \
                 (h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points)
+    
+@register_two_tower('SelfMambaEarlyFusion')
+class SelfMambaEarlyFusion(CrossBlockEarlyFusion):
+    """
+    Self-Mamba module for ablation study
+    The module is added before the (actionmamba or actionformer) backbone
+    """
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.7, num_layers=3, act_checkpoint=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2)
+        self.vw = vw
+        self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
+        self.num_layers = num_layers
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"SelfMambaEarlyFusion: vw={vw}, num_layers={num_layers}")
+
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PreNormCrossMambaBlock(
+                v_input_dim,
+                v_input_dim,
+                init_value=cfg1['two_tower']['init_value'],
+                path_pdrop=0.1,
+                channel_agg=cfg1['two_tower']['channel_agg'],
+                ca_type=cfg1['two_tower']['ca_type'],
+            )) for _ in range(num_layers)]
+        )
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PreNormCrossMambaBlock(
+                h_input_dim,
+                h_input_dim,
+                init_value=cfg1['two_tower']['init_value'],
+                path_pdrop=0.1,
+                channel_agg=cfg1['two_tower']['channel_agg'],
+                ca_type=cfg1['two_tower']['ca_type'],
+            )) for _ in range(num_layers)]
+        )
+
+    def fused_logit_foward(self, video_list, heatmap_list):
+        if getattr(self.visual_tower, 'pre_forward', None):
+            video_list = self.visual_tower.pre_forward(video_list)
+        if getattr(self.heatmap_tower, 'pre_forward', None):
+            heatmap_list = self.heatmap_tower.pre_forward(heatmap_list)
+        batched_v_inputs, batched_v_masks = self.visual_tower.preprocessing(video_list)
+        batched_h_inputs, batched_h_masks = self.heatmap_tower.preprocessing(heatmap_list)
+
+        # cross attention module here 
+        for i in range(self.num_layers):
+            # (query: visual, key/value: heatmap)
+            batched_v_inputs, batched_v_masks = self.h2v[i](query=batched_v_inputs, value=batched_v_inputs, 
+                                                            query_mask=batched_v_masks, kv_mask=batched_v_masks)
+            # (query: heatmap, key/value: visual)
+            batched_h_inputs, batched_h_masks = self.v2h[i](query=batched_h_inputs, value=batched_h_inputs, 
+                                                            query_mask=batched_h_masks, kv_mask=batched_h_masks)
+        
+        # forward the network (backbone -> neck -> heads)
+        v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points \
+            = self.visual_tower._logit_processed_input_forward(batched_v_inputs, batched_v_masks)
+        h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points \
+            = self.heatmap_tower._logit_processed_input_forward(batched_h_inputs, batched_h_masks)
+        
+        return (v_out_cls_logits, v_out_offsets, v_fpn_masks, v_points), \
+                (h_out_cls_logits, h_out_offsets, h_fpn_masks, h_points)
