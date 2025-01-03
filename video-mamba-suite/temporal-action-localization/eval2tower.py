@@ -111,79 +111,105 @@ def main(args):
     ### Stage 1
     cfg, eval_dataset, eval_db_vars, new_feat_path, new_feat_center, new_json_path = stage1infer_extractFeature(args)
 
-    if args.config2:
-        results = {
-                'seg-id': [],
+    if args.config2 and not args.only_perfect:
+        twotower_stage2eval(args, eval_dataset, eval_db_vars, new_feat_path, new_feat_center, new_json_path)
+
+    if args.config2 and args.infer_perfect_stage1:
+        # if cache exists, load it
+        save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + "_perfect.pkl"
+        save_cache_path = os.path.join(args.perfect_stage1, save_cache_name)
+        print(f"Try to load cache from {save_cache_path}")
+        if os.path.isfile(save_cache_path):
+            print(f"Loaded cache from {save_cache_path}")
+            with open(save_cache_path, 'rb') as f:
+                cache = pickle.load(f)
+            perfect_result = cache['result']
+            perfect_feat_center = cache['new_feat_center']
+            perfect_json_path = cache['new_json_path']
+        else:
+            # re-extract features
+            # do not support crop features
+            assert args.re_extract == True
+            ...
+
+        print("Evaluating based on perfect stage 1 ...")
+        twotower_stage2eval(
+            args, eval_dataset, eval_db_vars, args.perfect_stage1, perfect_feat_center, perfect_json_path
+        )
+
+
+def twotower_stage2eval(args, eval_dataset, eval_db_vars, new_feat_path, new_feat_center, new_json_path):
+    results = {
+                'seg-id': [], 
                 't-start': [],
                 't-end': [],
                 'score': [],
                 'label': [],
                 'video-id': []
         }
-        if os.path.isfile(args.config2):
-            cfg = load_config(args.config2)
-        else:
-            raise ValueError(f"Config file {args.config2} does not exist.")
-        if os.path.isfile(args.config3):
-            cfg2 = load_config(args.config3)
-        else:
-            raise ValueError(f"Config file {args.config3} does not exist.")
-        cfg['raise_error'] = cfg2['raise_error'] = args.raise_error
-        args.saveonly = False
-        cfg['dataset']['feat_folder'] = new_feat_path # cache dir
-        cfg2['dataset']['feat_folder'] = args.heatmap_dir
-        cfg['dataset']['json_file'] = new_json_path
-        cfg2['dataset']['json_file'] = new_json_path
-        cfg['val_split'] = ['test']
-        cfg2['val_split'] = ['test']
-        pprint(cfg)
-        pprint(cfg2)
-        det_eval = ANETdetection(
+    if os.path.isfile(args.config2):
+        cfg = load_config(args.config2)
+    else:
+        raise ValueError(f"Config file {args.config2} does not exist.")
+    if os.path.isfile(args.config3):
+        cfg2 = load_config(args.config3)
+    else:
+        raise ValueError(f"Config file {args.config3} does not exist.")
+    cfg['raise_error'] = cfg2['raise_error'] = args.raise_error
+    args.saveonly = False
+    cfg['dataset']['feat_folder'] = new_feat_path # cache dir
+    cfg2['dataset']['feat_folder'] = args.heatmap_dir
+    cfg['dataset']['json_file'] = new_json_path
+    cfg2['dataset']['json_file'] = new_json_path
+    cfg['val_split'] = ['test']
+    cfg2['val_split'] = ['test']
+    pprint(cfg)
+    pprint(cfg2)
+    det_eval = ANETdetection(
             eval_dataset.json_file,
             eval_dataset.split[0],
             tiou_thresholds=eval_db_vars['tiou_thresholds'],
             only_focus_on=cfg['dataset']['desired_actions']
         )
         # get action id dict from json file
-        label_dict = get_label_dict(eval_dataset.json_file, cfg['dataset']['desired_actions'])
-        if cfg['dataset']['num_classes'] == 1:  # single classification
-            for action in cfg['dataset']['desired_actions']:
-                action_id = single_cls_map(args, cfg, label_dict, action)
+    label_dict = get_label_dict(eval_dataset.json_file, cfg['dataset']['desired_actions'])
+    if cfg['dataset']['num_classes'] == 1:  # single classification
+        for action in cfg['dataset']['desired_actions']:
+            action_id = single_cls_map(args, cfg, label_dict, action)
                 # debug
-                actions = cfg['dataset']['desired_actions']
-                print(f'Desired Action: {actions}')
-                cfg2['dataset']['desired_actions'] = [action]
-                result = run2tower(cfg, cfg2, args, action_label=action)
+            actions = cfg['dataset']['desired_actions']
+            print(f'Desired Action: {actions}')
+            cfg2['dataset']['desired_actions'] = [action]
+            result = run2tower(cfg, cfg2, args, action_label=action)
 
                 # gather results (numpy) from different actions
-                results['seg-id'].extend(result['video-id'])
-                results['t-start'].extend(result['t-start'].tolist())
-                results['t-end'].extend(result['t-end'].tolist())
-                results['score'].extend(result['score'].tolist())
-                results['label'].extend([action_id]* len(result['score']))
-                results['video-id'].extend([i.split("#")[0] for i in result['video-id']])
+            results['seg-id'].extend(result['video-id'])
+            results['t-start'].extend(result['t-start'].tolist())
+            results['t-end'].extend(result['t-end'].tolist())
+            results['score'].extend(result['score'].tolist())
+            results['label'].extend([action_id]* len(result['score']))
+            results['video-id'].extend([i.split("#")[0] for i in result['video-id']])
                 
 
             # transform
-            results['t-start'] = torch.tensor(results['t-start']).numpy()
-            results['t-end'] = torch.tensor(results['t-end']).numpy()
-            results['label'] = torch.tensor(results['label']).numpy()
-            results['score'] = torch.tensor(results['score']).numpy()
-        else:                                   # multiple classification
-            args.ckpt = args.ckpt2
-            results = run2tower(cfg, cfg2, args, action_label=cfg['dataset']['desired_actions'])
-            results['seg-id'] = results['video-id']
-            results['video-id'] = [i.split("#")[0] for i in results['video-id']]
+        results['t-start'] = torch.tensor(results['t-start']).numpy()
+        results['t-end'] = torch.tensor(results['t-end']).numpy()
+        results['label'] = torch.tensor(results['label']).numpy()
+        results['score'] = torch.tensor(results['score']).numpy()
+    else:                                   # multiple classification
+        args.ckpt = args.ckpt2
+        results = run2tower(cfg, cfg2, args, action_label=cfg['dataset']['desired_actions'])
+        results['seg-id'] = results['video-id']
+        results['video-id'] = [i.split("#")[0] for i in results['video-id']]
         # shift t-start and t-end based on stage 1 segment results (+ t-center - 2)
-        results = shift_result(new_feat_center, results, args.seg_duration)
+    results = shift_result(new_feat_center, results, args.seg_duration)
         # evaluate
-        mAP = det_eval.evaluate(results) # should be evaluated on the original video rather than the clipped video
-        print(f"mAP: {mAP[0] * 100}")
-        if args.dump_result:
-            dump_result_path = os.path.join(new_feat_path, 'final_result.pkl')
-            with open(dump_result_path, 'wb') as f:
-                pickle.dump(results, f)
-
+    mAP = det_eval.evaluate(results) # should be evaluated on the original video rather than the clipped video
+    print(f"mAP: {mAP[0] * 100}")
+    if args.dump_result:
+        dump_result_path = os.path.join(new_feat_path, 'final_result.pkl')
+        with open(dump_result_path, 'wb') as f:
+            pickle.dump(results, f)
 
 ################################################################################
 if __name__ == '__main__':
@@ -241,5 +267,8 @@ if __name__ == '__main__':
     parser.add_argument('--heatmap_sigma', type=float, default=4, help='Heatmap sigma (default 4)')
     parser.add_argument("--dump_result", action='store_true')
     parser.add_argument("--last_epoch", action='store_true', help="use the last epoch to evaluate (default: best epoch)")
+    parser.add_argument("--infer_perfect_stage1", action='store_true', help="infer on best stage 1")
+    parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')
+    parser.add_argument("--only_perfect", action='store_true', help="only infer on perfect stage 1")
     args = parser.parse_args()
     main(args)

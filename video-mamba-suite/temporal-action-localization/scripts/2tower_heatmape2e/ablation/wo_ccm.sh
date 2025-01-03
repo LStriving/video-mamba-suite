@@ -1,21 +1,23 @@
 #!/bin/bash
-config=configs/2stage/2tower/crossmamba/ca/mamba_swallow_i3d_secondstage_2tower_crossmamba_l3_ep30_acu4_loadheatmap_channelagg_eca.yaml
+# keywords: LogitsAvg
+config=configs/2stage/2tower/without_ccm/mamba_swallow_i3d_secondstage_2tower_ep30_acu2_loadheatmap.yaml
+output_folder=$(grep 'output_folder:' "$config" | awk -F ':' '{print $2}' | xargs)
+vw=$(grep 'vw:' "$config" | awk -F ':' '{print $2}' | xargs)
+vw=${vw:0:3}
 config2=configs/2stage/heatmap/e2e/mamba/video_mamba/heatmap_secondstage_videomamba_l3_avgtoken_ep45_sigma4_hid576_noact.yaml
 
+echo "Ckpt folder: $output_folder, vw: $vw"
 python train2tower.py \
     $config \
     $config2 \
     --backbone_2 ckpts/link2/e2e_heatmap_stage2_video_mamba_l3_ep45_sigma4_hid576 \
     --output load_heatmap \
-    --tower_name CrossMambaEarlyFusion \
-    --resume resume \
-    --enable_branch_eval
+    --tower_name LogitsAvg \
+    --resume resume
 
-config=configs/2stage/2tower/crossmamba/ca/mamba_swallow_i3d_secondstage_2tower_crossmamba_l3_ep30_acu4_loadheatmap_channelagg_eca_vw0.6.yaml
-output_folder=$(grep 'output_folder:' "$config" | awk -F ':' '{print $2}' | xargs)
+config=configs/2stage/2tower/without_ccm/mamba_swallow_i3d_secondstage_2tower_ep30_acu2_loadheatmap_vw0.6.yaml
 vw=$(grep 'vw:' "$config" | awk -F ':' '{print $2}' | xargs)
 vw=${vw:0:3}
-echo "Ckpt folder: $output_folder, vw: $vw"
 base_name=$(basename $output_folder)
 mkdir -p outputs/${base_name}
 
@@ -33,6 +35,4 @@ nohup python eval2tower.py \
     --heatmap_branch none \
     --heatmap_size 56 \
     --image_size 128 \
-    --tower_name CrossMambaEarlyFusion > outputs/${base_name}/eval_${vw}.log
-
-# echo all commands to output file
+    --tower_name LogitsAvg > outputs/${base_name}/eval_${vw}.log

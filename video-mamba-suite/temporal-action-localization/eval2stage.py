@@ -166,7 +166,7 @@ def main(args):
     cfg, eval_dataset, eval_db_vars, new_feat_path, new_feat_center, new_json_path = stage1infer_extractFeature(args)
 
     ### Stage 2
-    if args.config2:
+    if args.config2 and not args.only_perfect:
         stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path, new_json_path)
     
     if args.config2 and args.infer_perfect_stage1:
@@ -191,7 +191,7 @@ def main(args):
                 initI3ds(args)
             perfect_feat_center = extract_features_from_res(args.video_root, args.perfect_stage1, args.flow_dir, perfect_result, cfg)
             perfect_json_path = build_tmp_json(cfg, perfect_feat_center)
-            cfg['cache_dir'] = args.cache_dir
+            cfg['cache_dir'] = args.cache_dir #？
 
             # save cache
             cache = {}
@@ -817,6 +817,7 @@ if __name__ == '__main__':
     parser.add_argument("--seg_duration", type=float, default=4.004, help='segment duration for stage 2')
     parser.add_argument("--dump_result", action='store_true', help='Whether to dump the final in cache dir')
     parser.add_argument("--last_epoch", action='store_true', help='use last epoch to evaluate(default: best epoch)')
+    parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
     args = parser.parse_args()
     main(args)
     # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt

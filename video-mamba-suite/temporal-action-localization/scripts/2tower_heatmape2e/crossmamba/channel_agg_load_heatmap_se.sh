@@ -2,7 +2,6 @@
 config=configs/2stage/2tower/crossmamba/ca/mamba_swallow_i3d_secondstage_2tower_crossmamba_l3_ep30_acu4_loadheatmap_channelagg_se.yaml
 config2=configs/2stage/heatmap/e2e/mamba/video_mamba/heatmap_secondstage_videomamba_l3_avgtoken_ep45_sigma4_hid576_noact.yaml
 
-echo "Ckpt folder: $output_folder, vw: $vw"
 python train2tower.py \
     $config \
     $config2 \
@@ -16,6 +15,7 @@ config=configs/2stage/2tower/crossmamba/ca/mamba_swallow_i3d_secondstage_2tower_
 output_folder=$(grep 'output_folder:' "$config" | awk -F ':' '{print $2}' | xargs)
 vw=$(grep 'vw:' "$config" | awk -F ':' '{print $2}' | xargs)
 vw=${vw:0:3}
+echo "Ckpt folder: $output_folder, vw: $vw"
 base_name=$(basename $output_folder)
 mkdir -p outputs/${base_name}
 
