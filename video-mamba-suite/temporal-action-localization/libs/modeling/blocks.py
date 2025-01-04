@@ -1186,7 +1186,9 @@ class PreNormCrossTransformerBlock(nn.Module):
         proj_pdrop=0.0,        # dropout rate for the projection / MLP
         path_pdrop=0.0,        # drop path rate
         mha_win_size=-1,       # > 0 to use window mha
-        use_rel_pe=False       # if to add rel position encoding to attention
+        use_rel_pe=False,      # if to add rel position encoding to attention
+        gamma_num=0,           # if to use gamma in the output (0: no gamma, 1: gamma in attn, 2: gamma in mlp & attn)
+        init_value=1e-1,       # initial value for the gamma
     ):
         super().__init__()
         assert len(n_ds_strides) == 2
@@ -1249,14 +1251,24 @@ class PreNormCrossTransformerBlock(nn.Module):
         else:
             self.drop_path_attn = nn.Identity()
             self.drop_path_mlp = nn.Identity()
+        
+        # gamma
+        if gamma_num >= 1:
+            self.gamma1 = nn.Parameter(torch.ones([1, n_embd, 1]) * init_value, requires_grad=True)
+        else:
+            self.gamma1 = 1.0
+        if gamma_num >= 2:
+            self.gamma2 = nn.Parameter(torch.ones([1, n_embd, 1]) * init_value, requires_grad=True)
+        else:
+            self.gamma2 = 1.0
 
     def forward(self, query, key, value, query_mask, kv_mask, pos_embd=None):
         # pre-LN transformer: https://arxiv.org/pdf/2002.04745.pdf
         out, out_mask = self.attn(self.ln1(query), self.ln3(key), self.ln3(value), query_mask, kv_mask)
         out_mask_float = out_mask.to(out.dtype)
-        out = self.pool_skip(query) * out_mask_float + self.drop_path_attn(out)
+        out = self.pool_skip(query) * out_mask_float + self.drop_path_attn(out * self.gamma1)
         # FFN
-        out = out + self.drop_path_mlp(self.mlp(self.ln2(out)) * out_mask_float)
+        out = out + self.drop_path_mlp(self.mlp(self.ln2(out)) * out_mask_float * self.gamma2) 
         # optionally add pos_embd to the output
         if pos_embd is not None:
             out += pos_embd * out_mask_float

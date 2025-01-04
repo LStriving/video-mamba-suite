@@ -33,8 +33,18 @@ def main(args):
     for video_name in tqdm(videos):
         video_path = os.path.join(input_dir, video_name)
         output_path = os.path.join(output_dir, video_name)
-        _, _, cropped_fusion = processor.infer_heatmaps(video_path)
-        np.save(output_path, cropped_fusion)
+        output_path = output_path.replace(args.video_ext, '')
+        if os.path.exists(output_path) and not args.overwrite:
+            continue
+        if args.feature_type == 'keypoint':
+            keypoint, _, _ = processor.infer_heatmaps(video_path)
+            np.save(output_path, keypoint)
+        elif args.feature_type == 'line':
+            _, line, _ = processor.infer_heatmaps(video_path)
+            np.save(output_path, line)
+        else:
+            _, _, cropped_fusion = processor.infer_heatmaps(video_path)
+            np.save(output_path, cropped_fusion)
 
     print(f"Processed {len(videos)} videos.")
     return
@@ -46,6 +56,9 @@ if __name__ == '__main__':
     parser.add_argument("--filter_file", type=str, default=None)
     parser.add_argument('--sigma', type=float, default=4)
     parser.add_argument("--video_ext", type=str, default='.avi')
+    parser.add_argument("--feature_type", choices=['keypoint', 'line', 'fusion'], default='fusion')
+    parser.add_argument("--overwrite", action='store_true')
+    parser.add_argument("--num_workers", type=int, default=4)
     args = parser.parse_args()
     main(args)
 
@@ -58,7 +71,16 @@ python tools/extract_heatmap.py \
 
 python tools/extract_heatmap.py \
     --input_dir /mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas \
-    --output_dir data/swallow/stage_2/raw_heatmap_sigma4 \
-    --filter_file /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-test.txt \
-    --sigma 4
+    --output_dir data/swallow/stage_2/raw_heatmap_sigma4_keypoint \
+    --filter_file /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt \
+    --sigma 4 \
+    --feature_type keypoint
+
+
+python tools/extract_heatmap.py \
+    --input_dir /mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas \
+    --output_dir data/swallow/stage_2/raw_heatmap_sigma4_line \
+    --filter_file /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt \
+    --sigma 4 \
+    --feature_type line
 '''

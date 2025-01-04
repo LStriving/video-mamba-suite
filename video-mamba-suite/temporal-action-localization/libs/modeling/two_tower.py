@@ -406,6 +406,78 @@ class CrossAttnEarlyFusionPreNorm(CrossBlockEarlyFusion):
             )) for _ in range(num_layers)]
         )
 
+@register_two_tower('CrossAttnEarlyFusion-PreNorm-LastLayerGamma')
+class CrossAttnEarlyFusionPreNormLastLayerGamma(CrossBlockEarlyFusion):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=3, act_checkpoint=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2, vw, num_layers, act_checkpoint)
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"CrossAttnEarlyFusion-PreNorm-LastLayerGamma: vw={vw}, num_layers={num_layers}")
+        print(f"v_input_dim={v_input_dim}, h_input_dim={h_input_dim}")
+
+        assert num_layers > 1, "num_layers should be larger than 1"
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PreNormCrossTransformerBlock(
+                v_input_dim,
+                h_input_dim,
+                cfg1['model']['n_head'],
+                gamma_num=0,
+            )) for _ in range(num_layers - 1)]
+        )
+        self.h2v.append(self.wrapper(PreNormCrossTransformerBlock(
+            v_input_dim,
+            h_input_dim,
+            cfg1['model']['n_head'],
+            gamma_num=cfg1['two_tower']['gamma_num'],
+            init_value=cfg1['two_tower']['init_value'],
+        ))) # last layer with gamma
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PreNormCrossTransformerBlock(
+                h_input_dim,
+                v_input_dim,
+                cfg1['model']['n_head'],
+                gamma_num=0,
+            )) for _ in range(num_layers - 1)]
+        )
+        self.v2h.append(self.wrapper(PreNormCrossTransformerBlock(
+            h_input_dim,
+            v_input_dim,
+            cfg1['model']['n_head'],
+            gamma_num=cfg1['two_tower']['gamma_num'],
+            init_value=cfg1['two_tower']['init_value'],
+        ))) # last layer with gamma
+
+
+@register_two_tower('CrossAttnEarlyFusion-PreNorm-Gamma')
+class CrossAttnEarlyFusionPreNormLastLayerGamma(CrossBlockEarlyFusion):
+    def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=3, act_checkpoint=True, *args, **kwargs):
+        super().__init__(visual_tower, heatmap_tower, cfg1, cfg2, vw, num_layers, act_checkpoint)
+        v_input_dim = cfg1['model']['input_dim']
+        h_input_dim = cfg2['model']['input_dim']
+        print(f"CrossAttnEarlyFusion-PreNorm-LastLayerGamma: vw={vw}, num_layers={num_layers}")
+        print(f"v_input_dim={v_input_dim}, h_input_dim={h_input_dim}")
+
+        assert num_layers > 1, "num_layers should be larger than 1"
+        self.h2v = nn.ModuleList( # query: visual, key/value: heatmap
+            [self.wrapper(PreNormCrossTransformerBlock(
+                v_input_dim,
+                h_input_dim,
+                cfg1['model']['n_head'],
+                gamma_num=cfg1['two_tower']['gamma_num'],
+                init_value=cfg1['two_tower']['init_value'],
+            )) for _ in range(num_layers)]
+        )
+        self.v2h = nn.ModuleList(
+            [self.wrapper(PreNormCrossTransformerBlock(
+                h_input_dim,
+                v_input_dim,
+                cfg1['model']['n_head'],
+                gamma_num=cfg1['two_tower']['gamma_num'],
+                init_value=cfg1['two_tower']['init_value'],
+            )) for _ in range(num_layers)]
+        )
+
+
 @register_two_tower('DINOAttnEarlyFusion')
 class DINOAttnEarlyFusionPreNorm(CrossBlockEarlyFusion):
     def __init__(self, visual_tower, heatmap_tower, cfg1, cfg2, vw=0.8, num_layers=1, act_checkpoint=True, *args, **kwargs):
