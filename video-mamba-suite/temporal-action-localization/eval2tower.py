@@ -270,5 +270,6 @@ if __name__ == '__main__':
     parser.add_argument("--infer_perfect_stage1", action='store_true', help="infer on best stage 1")
     parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')
     parser.add_argument("--only_perfect", action='store_true', help="only infer on perfect stage 1")
+    parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     args = parser.parse_args()
     main(args)

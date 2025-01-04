@@ -173,6 +173,13 @@ def main(args):
         # if cache exists, load it
         save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + "_perfect.pkl"
         save_cache_path = os.path.join(args.perfect_stage1, save_cache_name)
+        cfg['heatmap_type'] = args.heatmap_type
+        cfg['heatmap_dir'] = args.heatmap_dir
+        cfg['image_size'] = args.image_size
+        cfg['heatmap_size'] = args.heatmap_size
+        cfg['heatmap_branch'] = args.heatmap_branch
+        cfg['heatmap'] = args.heatmap
+        cfg['keypoint']['sigma'] = args.heatmap_sigma
         if os.path.isfile(save_cache_path):
             print(f"Loading cache from {save_cache_path}")
             with open(save_cache_path, 'rb') as f:
@@ -238,6 +245,7 @@ def stage1infer_extractFeature(args):
     cfg['heatmap'] = args.heatmap
     cfg['keypoint']['sigma'] = args.heatmap_sigma
     cfg['seg_duration'] = args.seg_duration
+    cfg['heatmap_type'] = args.heatmap_type
 
     # if cache exists, load it
     save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + ".pkl"
@@ -524,7 +532,8 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                     rgb_data=rgb_data.float()
                     preprocess = None
                 else:
-                    preprocess = partial(extract_keypoints, processor=processor, HEATMAP_SIZE=HEATMAP_SIZE, branch=cfg['heatmap_branch'])
+                    preprocess = partial(extract_keypoints, processor=processor, 
+                    HEATMAP_SIZE=HEATMAP_SIZE, branch=cfg['heatmap_branch'], heatmap_type=cfg['heatmap_type'])
                 
                 if flow_dir is not None:
                     flow_data=get_flow_frames_from_targz(os.path.join(flow_dir, f"{video_id}.tar.gz"))
@@ -582,12 +591,20 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
         #     build_tmp_json(cfg, new_feats)
     return new_feats
 
-def extract_keypoints(video_data, processor, HEATMAP_SIZE, branch):
+def extract_keypoints(video_data, processor, HEATMAP_SIZE, branch, heatmap_type='fusion'):
     '''
         Please make sure use this function when the video_data is cropped rather than the whole video,
         otherwise it will lead to worser performance.
     '''
-    fusion_data = processor.infer_heatmaps(video_data)[-1]
+    if heatmap_type.lower() == 'fusion':
+        index = -1
+    elif heatmap_type.lower() == 'keypoint':
+        index = 0
+    elif heatmap_type.lower() == 'line':
+        index = 1
+    else:
+        raise ValueError("Invalid heatmap type")
+    fusion_data = processor.infer_heatmaps(video_data)[index]
     rgb_data = torch.from_numpy(fusion_data).unsqueeze(1)
     rgb_data = torch.nn.functional.interpolate(rgb_data, (HEATMAP_SIZE, HEATMAP_SIZE), mode='bilinear', align_corners=False)
     if branch == 'rgb':
@@ -818,6 +835,7 @@ if __name__ == '__main__':
     parser.add_argument("--dump_result", action='store_true', help='Whether to dump the final in cache dir')
     parser.add_argument("--last_epoch", action='store_true', help='use last epoch to evaluate(default: best epoch)')
     parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
+    parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     args = parser.parse_args()
     main(args)
     # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt
