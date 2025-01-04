@@ -219,6 +219,16 @@ def stage1infer_extractFeature(args):
         cfg = load_config(args.config)
     else:
         raise ValueError("Config file does not exist.")
+    cfg['cache_dir'] = args.cache_dir
+    cfg['cropped_videos'] = args.cropped_videos
+    cfg['heatmap_dir'] = args.heatmap_dir
+    cfg['image_size'] = args.image_size
+    cfg['heatmap_size'] = args.heatmap_size
+    cfg['heatmap_branch'] = args.heatmap_branch
+    cfg['heatmap'] = args.heatmap
+    cfg['keypoint']['sigma'] = args.heatmap_sigma
+    cfg['seg_duration'] = args.seg_duration
+    cfg['heatmap_type'] = args.heatmap_type
     pprint(cfg)
     args.saveonly = True
     eval_dataset = make_dataset(cfg['dataset_name'], False, cfg['val_split'],
@@ -236,16 +246,6 @@ def stage1infer_extractFeature(args):
     # init
     new_feat_path = args.cache_dir
     os.makedirs(new_feat_path, exist_ok=True)
-    cfg['cache_dir'] = args.cache_dir
-    cfg['cropped_videos'] = args.cropped_videos
-    cfg['heatmap_dir'] = args.heatmap_dir
-    cfg['image_size'] = args.image_size
-    cfg['heatmap_size'] = args.heatmap_size
-    cfg['heatmap_branch'] = args.heatmap_branch
-    cfg['heatmap'] = args.heatmap
-    cfg['keypoint']['sigma'] = args.heatmap_sigma
-    cfg['seg_duration'] = args.seg_duration
-    cfg['heatmap_type'] = args.heatmap_type
 
     # if cache exists, load it
     save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + ".pkl"
