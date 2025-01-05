@@ -258,6 +258,14 @@ def stage1infer_extractFeature(args):
         new_feat_center = cache['new_feat_center']
         new_feat_path = args.cache_dir
         new_json_path = cache['new_json_path']
+        # if data not extracted, re-extract
+        feat_num = len([i for i in os.listdir(new_feat_path) if i.endswith('.npy')])
+        if feat_num != len(new_feat_center):
+            if args.re_extract:
+                if args.heatmap_branch in ['rgb', 'flow'] or not args.heatmap:
+                    initI3ds(args)
+                feat_center = extract_features_from_res(args.video_root, new_feat_path, args.flow_dir, result, cfg)
+                # assert feat_center == new_feat_center, "Re-extracted features are not the same as the original ones."
     else:
         result = run(cfg, args, action_label=cfg['dataset']['desired_actions'], infer_or_eval=infer_one_epoch)
         # {video-id:[], t-start:[], t-end:[], score:[], label:[]}
