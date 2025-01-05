@@ -92,8 +92,6 @@ def make_optimizer(model, optimizer_config, pretrained_name=None, pretrained_lr_
             elif pn.endswith('scale') and isinstance(m, (Scale, AffineDropPath)):
                 # corner case of our scale layer
                 no_decay.add(fpn)
-            elif pn.endswith('gamma'):
-                no_decay.add(fpn)
             elif pn.endswith('rel_pe'):
                 # corner case for relative position encoding
                 no_decay.add(fpn)
@@ -110,6 +108,8 @@ def make_optimizer(model, optimizer_config, pretrained_name=None, pretrained_lr_
             elif pn.endswith("_proj_weight"):
                 # corner case for decay lgte
                 decay.add(fpn)
+            elif pn.endswith('gamma') or 'gamma' in pn:
+                no_decay.add(fpn)
 
     # validate that we considered every parameter
     param_dict = {pn: p for pn, p in model.named_parameters()}
