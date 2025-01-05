@@ -1,6 +1,7 @@
 import math
 import os
 from collections import OrderedDict
+from einops import rearrange
 import torch
 import torch.nn as nn
 from torchvision.models import resnet50
@@ -12,6 +13,7 @@ from libs.modeling.videomamba import VisionMamba
 
 from .models import register_video_stem, register_image_stem
 from .blocks import MaskMambaBlock, MaskedPoolingMHCA, MaskedPoolingMHCAv2, MaskMultiScaleMambaBlock
+from .videomamba import PatchEmbed
 from pytorch_i3d import InceptionI3d
 
 @register_image_stem('resnet50')
@@ -486,23 +488,123 @@ class MViT_v2(TemporalNet):
             )
 
 class SpatialTemporalNet(nn.Module):
+    """
+    SpatialTemporalNet is a base class for all spatial temporal networks.
+    Using the learnable positional embeddings
+    """
     def __init__(
         self,
         image_size: int,
         patch_size: int,
         in_channels: int,
         embed_dim: int,
+        num_frames: int,
         num_layers: int,
-        pool_size: int,
-        pool_mode: str,
-        abs_pos_embed: bool,
         pos_drop: float,
         act_checkpoint: bool,
         *args, 
         **kwargs
     ):
         super().__init__()
-        # TODO: Implement the spatial temporal net
+        self.patch_embed = PatchEmbed(
+            img_size=image_size,
+            patch_size=patch_size,
+            in_chans=in_channels,
+            embed_dim=embed_dim,
+        )
+        self.embed_dim = embed_dim
+        self.num_patches = self.patch_embed.num_patches
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, self.embed_dim))
+        self.pos_drop = nn.Dropout(p=pos_drop)
+        self.wrapper = checkpoint_wrapper if act_checkpoint else lambda x: x
+        self.n_layers = num_layers
+        self.temporal_pos_embedding = nn.Parameter(torch.zeros(1, num_frames, embed_dim))
+        self.blocks = nn.ModuleList()
+        self.use_mask = False
+
+    def forward_features(self, x):
+        x = self.patch_embed(x)
+        B, C, T, H, W = x.shape
+        x = x.permute(0, 2, 3, 4, 1).reshape(B * T, H * W, C)
+
+        cls_token = self.cls_token.expand(x.shape[0], -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        x = torch.cat((cls_token, x), dim=1)
+        x = x + self.pos_embed
+
+        # temporal pos
+        cls_tokens = x[:B, :1, :]
+        x = x[:, 1:]
+        x = rearrange(x, '(b t) n m -> (b n) t m', b=B, t=T)
+        x = x + self.temporal_pos_embedding
+        x = rearrange(x, '(b n) t m -> b (t n) m', b=B, t=T)
+        x = torch.cat((cls_tokens, x), dim=1)
+
+        x = self.pos_drop(x)
+        # x: B, N, D
+        x = x.transpose(1, 2)
+
+        if self.use_mask:
+            mask = torch.ones((x.shape[0], 1, x.shape[-1]), device=x.device).bool()
+            
+
+        for i in range(self.n_layers):
+            if self.use_mask:
+                x, mask = self.blocks[i](x, mask)
+            else:
+                x = self.blocks[i](x)
+        
+        # desired output shape: (B, C)
+        x = x.squeeze(-1)
+
+        return x
+
+@register_video_stem("video_mvit")
+class VideoMViT(SpatialTemporalNet):
+    def __init__(
+        self,
+        image_size: int,
+        patch_size: int,
+        num_layers: int,
+        embed_dim: int,
+        in_channels: int,
+        num_frames: int,
+        num_heads: int,
+        attn_dropout: float,
+        pool_size: int,
+        pool_mode: str,
+        pos_drop: float,
+        act_checkpoint: bool,
+        **kwargs
+    ):
+        super().__init__(
+            image_size=image_size,
+            patch_size=patch_size,
+            in_channels=in_channels,
+            embed_dim=embed_dim,
+            num_layers=num_layers,
+            num_frames=num_frames,
+            pos_drop=pos_drop,
+            act_checkpoint=act_checkpoint,
+        )
+        self.num_frames = num_frames
+        for _ in range(num_layers):
+            self.blocks.append(
+                self.wrapper(MaskedPoolingMHCA(
+                    n_embd=embed_dim,
+                    n_head=num_heads,
+                    attn_pdrop=attn_dropout,
+                    pool_qx_size=pool_size,
+                    pool_kv_size=pool_size,
+                    pool_method=pool_mode
+                ))
+            )
+            self.use_mask = True
+    
+    def forward(self, x):
+        
+        return self.forward_features(x)
+
 
 @register_video_stem('video_mamba')
 class VideoMamba(VisionMamba):
