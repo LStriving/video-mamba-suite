@@ -238,7 +238,7 @@ def generate_a_limb_heatmap(arr, starts, ends, start_values, end_values, sigma =
 
 
 class VideoKeypointProcessor:
-    def __init__(self, model_path, image_width=192, image_height=256, batch_size=32, num_workers=4, sigma=0.6):
+    def __init__(self, model_path, image_width=192, image_height=256, batch_size=32, num_workers=4, sigma=0.6, crop_mode='auto'):
         self.image_width = image_width
         self.image_height = image_height
         self.batch_size = batch_size
@@ -262,6 +262,7 @@ class VideoKeypointProcessor:
         self.confidences = None
         self.original_frames = None
         self.skeleton = np.array([(0,1),(0,2),(1,2),(0,4),(3,4),(3,6),(5,6),(5,7),(6,7)])
+        self.crop_mode = crop_mode
 
 
     def _resize_video_frames(self, video_array):
@@ -351,7 +352,7 @@ class VideoKeypointProcessor:
         # 使用 np.nonzero 找到非零元素的索引
         non_zero_indices = np.nonzero(arrs_keypoint)
 
-        if len(non_zero_indices[0]) > 0:  # 判断是否存在非零元素
+        if len(non_zero_indices[0]) > 0 and self.crop_mode == 'auto':  # 判断是否存在非零元素
             # 获取最小和最大行列坐标
             min_row, max_row = non_zero_indices[1].min(), non_zero_indices[1].max()  # 行索引
             min_col, max_col = non_zero_indices[2].min(), non_zero_indices[2].max()  # 列索引
