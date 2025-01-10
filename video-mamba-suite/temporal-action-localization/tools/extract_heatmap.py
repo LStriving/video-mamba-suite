@@ -17,8 +17,13 @@ def get_file_list(file_path, ext='.avi'):
 
 def main(args):
     sigma = args.sigma
-    processor = VideoKeypointProcessor('/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt',
-                                       sigma=sigma)
+    if args.img_width is not None and args.img_height is not None:
+        processor = VideoKeypointProcessor('/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt',
+                                        image_height=args.img_height, image_width=args.img_width,
+                                        sigma=sigma)
+    else:
+        processor = VideoKeypointProcessor('/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt',
+                                        sigma=sigma)
     input_dir = args.input_dir
     output_dir = args.output_dir
     assert os.path.exists(input_dir), f"Input directory {input_dir} does not exist."
@@ -42,9 +47,16 @@ def main(args):
         elif args.feature_type == 'line':
             _, line, _ = processor.infer_heatmaps(video_path)
             np.save(output_path, line)
-        else:
+        elif args.feature_type == 'fusion':
             _, _, cropped_fusion = processor.infer_heatmaps(video_path)
             np.save(output_path, cropped_fusion)
+        elif args.feature_type == 'all':
+            keypoint, line, cropped_fusion = processor.infer_heatmaps(video_path)
+            np.save(output_path + '_keypoint', keypoint)
+            np.save(output_path + '_line', line)
+            np.save(output_path + '_fusion', cropped_fusion)
+        else:
+            raise ValueError(f"Unknown feature type: {args.feature_type}")
 
     print(f"Processed {len(videos)} videos.")
     return
@@ -56,9 +68,11 @@ if __name__ == '__main__':
     parser.add_argument("--filter_file", type=str, default=None)
     parser.add_argument('--sigma', type=float, default=4)
     parser.add_argument("--video_ext", type=str, default='.avi')
-    parser.add_argument("--feature_type", choices=['keypoint', 'line', 'fusion'], default='fusion')
+    parser.add_argument("--feature_type", choices=['keypoint', 'line', 'fusion','all'], default='fusion')
     parser.add_argument("--overwrite", action='store_true')
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--img_width", type=int, default=None)
+    parser.add_argument("--img_height", type=int, default=None)
     args = parser.parse_args()
     main(args)
 
@@ -83,4 +97,13 @@ python tools/extract_heatmap.py \
     --filter_file /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt \
     --sigma 4 \
     --feature_type line
+
+python tools/extract_heatmap.py \
+    --input_dir /mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas \
+    --output_dir tmp/plot \
+    --filter_file tmp/tmplist \
+    --sigma 4 \
+    --feature_type all \
+    --img_width 612 \
+    --img_height 612
 '''
