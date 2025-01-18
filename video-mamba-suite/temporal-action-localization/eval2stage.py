@@ -179,7 +179,7 @@ def main(args):
         cfg['heatmap_size'] = args.heatmap_size
         cfg['heatmap_branch'] = args.heatmap_branch
         cfg['heatmap'] = args.heatmap
-        cfg['keypoint']['sigma'] = args.heatmap_sigma
+        cfg['keypoint']['sigma'] = args.heatmap_sigma if args.heatmap else cfg['keypoint']['sigma']
         if os.path.isfile(save_cache_path):
             print(f"Loading cache from {save_cache_path}")
             with open(save_cache_path, 'rb') as f:

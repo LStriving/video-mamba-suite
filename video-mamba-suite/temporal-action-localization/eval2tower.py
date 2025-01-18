@@ -258,7 +258,6 @@ if __name__ == '__main__':
                         help='name of the two-tower model (default: Convfusion)')
     parser.add_argument('--confidence', default=0.23, type=float,
                         help='confidence threshold for stage 1')
-    parser.add_argument('--cropped_videos_visual', action='store_true', help='the input (video_root) are cropped videos')  #TODO: remove or fix it
     parser.add_argument('--cropped_videos', action='store_true', help='the heatmap input (video_root) are cropped videos')
     parser.add_argument('--heatmap_branch', choices=['rgb', 'flow', 'none'], default='none', help='which branch to extract heatmap features')
     parser.add_argument('--heatmap_size', type=int, default=56, help='size of heatmap')
