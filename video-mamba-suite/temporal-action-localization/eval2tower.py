@@ -206,8 +206,8 @@ def twotower_stage2eval(args, eval_dataset, eval_db_vars, new_feat_path, new_fea
         # evaluate
     mAP = det_eval.evaluate(results) # should be evaluated on the original video rather than the clipped video
     print(f"mAP: {mAP[0] * 100}")
-    if args.dump_result:
-        dump_result_path = os.path.join(new_feat_path, 'final_result.pkl')
+    if args.result_path:
+        dump_result_path = os.path.join(args.result_path, 'final_result.pkl')
         with open(dump_result_path, 'wb') as f:
             pickle.dump(results, f)
 
@@ -264,7 +264,7 @@ if __name__ == '__main__':
     parser.add_argument("--seg_duration", type=float, default=4.004, help='segment duration for stage 2 (default: 4.004)')
     parser.add_argument('--image_size', type=int, default=128, help='size of image')
     parser.add_argument('--heatmap_sigma', type=float, default=4, help='Heatmap sigma (default 4)')
-    parser.add_argument("--dump_result", action='store_true')
+    parser.add_argument("--result_path", type=str, default=None, help='path to save the result')
     parser.add_argument("--last_epoch", action='store_true', help="use the last epoch to evaluate (default: best epoch)")
     parser.add_argument("--infer_perfect_stage1", action='store_true', help="infer on best stage 1")
     parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')

@@ -407,8 +407,8 @@ def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path,
         results['video-id'] = [i.split("#")[0] for i in results['video-id']]
     # shift t-start and t-end based on stage 1 segment results (+ t-center - 2)
     results = shift_result(new_feat_center, results, args.seg_duration)
-    if args.dump_result:
-        dump_result_path = os.path.join(new_feat_path, 'final_result.pkl')
+    if args.result_path:
+        dump_result_path = os.path.join(args.result_path, 'final_result.pkl')
         with open(dump_result_path, 'wb') as f:
             pickle.dump(results, f)
     # evaluate
@@ -840,7 +840,7 @@ if __name__ == '__main__':
     parser.add_argument("--infer_perfect_stage1", action='store_true', help="infer on best stage 1")
     parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')
     parser.add_argument("--seg_duration", type=float, default=4.004, help='segment duration for stage 2')
-    parser.add_argument("--dump_result", action='store_true', help='Whether to dump the final in cache dir')
+    parser.add_argument("--result_path", type=str, default=None, help='output result path')
     parser.add_argument("--last_epoch", action='store_true', help='use last epoch to evaluate(default: best epoch)')
     parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
