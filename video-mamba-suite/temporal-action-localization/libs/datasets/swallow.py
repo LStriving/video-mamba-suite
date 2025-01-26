@@ -106,6 +106,8 @@ class SwallowDataset(Dataset):
         # load database and select the subset
         with open(json_file, 'r') as fid:
             json_data = json.load(fid)
+        if 'database' in  json_data:
+            json_data = json_data['database']
         json_db = json_data
 
         # if label_dict is not available

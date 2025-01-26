@@ -493,8 +493,10 @@ def valid_one_epoch(
         **kwargs
     )
     # call the evaluator
-    
-    _, mAP = evaluator.evaluate(results, verbose=True)
+    if evaluator is not None:
+        _, mAP = evaluator.evaluate(results, verbose=True)
+    else:
+        return None
 
     # log mAP to tb_writer
     if tb_writer is not None:

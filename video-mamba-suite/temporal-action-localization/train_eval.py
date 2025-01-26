@@ -144,7 +144,7 @@ def main(args):
             clip_grad_l2norm = cfg['train_cfg']['clip_grad_l2norm'],
             tb_writer=tb_writer,
             print_freq=args.print_freq,
-            accum_steps=cfg['loader']['accum_steps']
+            accum_step_num=cfg['loader']['accum_steps']
         )
         
         if epoch>=5:#(max_epochs//4):
