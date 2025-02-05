@@ -49,8 +49,8 @@ def pkl2json(pkl_path, json_path, save_pretty=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Convert pkl to json')
-    parser.add_argument('pkl_path', type=str, help='path to pkl file')
-    parser.add_argument('json_path', type=str, help='path to save json file')
+    parser.add_argument('--pkl_path', type=str, help='path to pkl file')
+    parser.add_argument('--json_path', type=str, help='path to save json file')
     parser.add_argument('--save_pretty', action='store_true', help='save pretty json file')
     args = parser.parse_args()
     pkl2json(args.pkl_path, args.json_path, args.save_pretty)

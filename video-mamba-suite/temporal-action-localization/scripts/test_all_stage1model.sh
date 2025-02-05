@@ -1,5 +1,5 @@
 ckpt_root=ckpts/ckpt_swallow/mamba_swallow_i3d_stage1_mamba_swallow_stage1_2_0.0001
-
+mkdir -p outputs/reproduce_stage1
 # get all ckpt files under the ckpt_root
 ckpt_files=$(find $ckpt_root -name "*.pth.tar")
 
@@ -8,5 +8,5 @@ for ckpt_file in $ckpt_files
 do
     basename=$(basename $ckpt_file)
     echo "Testing $ckpt_file"
-    python eval.py --config configs/2stage/mamba_swallow_i3d_train_stage1_traintest.yaml --ckpt $ckpt_file > outputs/stage1_test/$basename.log
+    python eval.py --config configs/2stage/mamba_swallow_i3d_train_stage1_traintest.yaml --ckpt $ckpt_file > outputs/reproduce_stage1/$basename.log
 done

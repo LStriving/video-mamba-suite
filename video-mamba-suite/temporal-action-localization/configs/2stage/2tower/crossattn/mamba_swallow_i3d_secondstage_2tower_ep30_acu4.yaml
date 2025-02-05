@@ -1,15 +1,13 @@
-dataset_name: heatmap_rawdata
+dataset_name: swallow
 train_split: ['train']
 val_split: ['validation']
-model_name: E2Eformer
 dataset: {
   json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
-  # feat_folder: ./data/swallow/stage_2/resnet50_keypointfeat_56,
-  feat_folder: data/swallow/stage_2/raw_heatmap_sigma4,
+  feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
   file_prefix: ~,
   file_ext: .npy,
   num_classes: 1,
-  input_dim: 1024,
+  input_dim: 2048,
   feature_type: "",
   # feature_type: "_spatial_feature",
   #2048+768, 1024+768,1280+1024
@@ -22,7 +20,6 @@ dataset: {
   two_stage: True,
   stage_at: 2,
   desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
-  resize_to: 56,
 }
 model: {
   backbone_type: mamba,
@@ -35,9 +32,6 @@ model: {
   ],
   scale_factor: 2,
   fpn_type: identity,
-  image_stem: MVMamba,
-  video_stem: MMamba,
-  frozen_image_embed: False,
 }
 opt: {
   learning_rate: 0.0001,
@@ -48,6 +42,7 @@ opt: {
 }
 loader: {
   batch_size: 16,
+  accum_steps: 4,
 }
 train_cfg: {
   init_loss_norm: 100,
@@ -71,30 +66,9 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-image_stem: {
-  image_size: 56,
-  patch_size: 7,
-  embed_dim: 1024,
-  in_channels: 1,
-  num_heads: 4,
-  attn_dropout: 0.0,
-  num_layers: 2,
-  pool_size: 8,
-  pool_mode: max,
-  drop_path_rate: 0.1,
+two_tower: {
+  vw: 0.5,
+  num_layers: 1,
   act_checkpoint: True,
 }
-video_stem: {
-  embed_dim: 1024,
-  num_heads: 4,
-  attn_dropout: 0.0,
-  num_layers: 2,
-  pool_size: 4,
-  pool_mode: max,
-  drop_path_rate: 0.1,
-  act_checkpoint: False,
-}
-keypoint: {
-  sigma: 4,
-}
-output_folder: ./ckpts/link2/e2e_heatmap_stage2_2MmambaNMmamba_ep30_sigma4/
+output_folder: ./ckpts/link2/2tower_dinolikeattn_ep30/

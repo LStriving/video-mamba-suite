@@ -21,6 +21,5 @@ do
         --heatmap_branch none \
         --heatmap_size 56 \
         --image_size 128 \
-        --dump_result \
         --tower_name CrossMambaEarlyFusion > outputs/$base_name/$action_name.log
 done

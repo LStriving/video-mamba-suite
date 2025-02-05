@@ -24,5 +24,5 @@ do
         --only_perfect \
         --infer_perfect_stage1 --perfect_stage1 ./tmp/old_i3d_rgb128_flow128_perfect/ \
         --tower_name CrossMambaEarlyFusion > outputs/oracle_$base_name/$action_name.log
-        # --dump_result \
+        # --result_path outputs \
 done

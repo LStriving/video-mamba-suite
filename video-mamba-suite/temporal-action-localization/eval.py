@@ -75,7 +75,7 @@ def main(args):
 
     # set up evaluator
     det_eval, output_file = None, None
-    if not args.saveonly:
+    if not args.result_path:
         val_db_vars = val_dataset.get_attributes()
         det_eval = ANETdetection(
             val_dataset.json_file,
@@ -85,7 +85,7 @@ def main(args):
         )
     else:
         output_file = os.path.join(
-            os.path.split(ckpt_file)[0], 'eval_results.pkl')
+            args.result_path, os.path.split(ckpt_file)[0], f'eval_results.pkl')
     """5. Test the model"""
     print("\nStart testing model {:s} ...".format(cfg['model_name']))
     start = time.time()
@@ -133,9 +133,8 @@ if __name__ == '__main__':
                         type=int,
                         help='max number of output actions (default: -1)')
     parser.add_argument(
-        '--saveonly',
-        action='store_true',
-        help='Only save the ouputs without evaluation (e.g., for test set)')
+        '--result_path',
+        type=str, default=None, help='output result path')
     parser.add_argument('-p',
                         '--print-freq',
                         default=10,
