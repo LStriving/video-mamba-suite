@@ -211,9 +211,7 @@ def twotower_stage2eval(args, eval_dataset, eval_db_vars, new_feat_path, new_fea
         with open(dump_result_path, 'wb') as f:
             pickle.dump(results, f)
 
-################################################################################
-if __name__ == '__main__':
-    """Entry Point"""
+def get_args():
     # the arg parser
     parser = argparse.ArgumentParser(
       description='Train a point-based transformer for action localization')
@@ -271,4 +269,10 @@ if __name__ == '__main__':
     parser.add_argument("--only_perfect", action='store_true', help="only infer on perfect stage 1")
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     args = parser.parse_args()
+    return args
+
+################################################################################
+if __name__ == '__main__':
+    """Entry Point"""
+    args = get_args()
     main(args)

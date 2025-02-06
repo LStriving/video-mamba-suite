@@ -19,7 +19,7 @@ from libs.modeling import make_meta_arch
 from libs.utils import (train_one_epoch, valid_one_epoch, ANETdetection,
                         save_checkpoint, make_optimizer, make_scheduler,
                         fix_random_seed, ModelEma)
-
+from tools.load_model import load_backbone
 
 ################################################################################
 def main(args):
@@ -84,6 +84,10 @@ def main(args):
     # enable model EMA
     print("Using model EMA ...")
     model_ema = ModelEma(model)
+
+    """3.5 Load Pretrain backbone"""
+    if args.backbone and not args.resume:
+        load_backbone(model, args.backbone, device=cfg['device'][0])
 
     """4. Resume from model / Misc"""
     # resume from a checkpoint?
@@ -228,5 +232,7 @@ if __name__ == '__main__':
                         help='name of exp folder (default: none)')
     parser.add_argument('--resume', default='', type=str, metavar='PATH',
                         help='path to a checkpoint (default: none)')
+    parser.add_argument('--backbone',default=None, type=str,
+                        help='path to petrained backbone like videomae (default:none)')
     args = parser.parse_args()
     main(args)

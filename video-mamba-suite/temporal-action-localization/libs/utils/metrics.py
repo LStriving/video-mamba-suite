@@ -80,7 +80,10 @@ def load_pred_seg_from_json(json_file, label='label_id', label_offset=0):
     # load json file
     with open(json_file, "r", encoding="utf8") as f:
         json_db = json.load(f)
-    json_db = json_db['database']
+    if 'database' in json_db:
+        json_db = json_db['database']
+    if 'results' in json_db:
+        json_db = json_db['results']
 
     vids, starts, stops, labels, scores = [], [], [], [], []
     for k, v, in json_db.items():
