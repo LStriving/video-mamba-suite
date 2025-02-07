@@ -90,10 +90,11 @@ class SwallowDataset(Dataset):
         self.data_list = dict_db
         self.label_dict = label_dict
 
+        tiou_threshold = kwargs.get('tiou_threshold', np.linspace(0.1, 0.7, 7))
         # dataset specific attributes
         self.db_attributes = {
             'dataset_name': 'swallow',
-            'tiou_thresholds': np.linspace(0.1, 0.7, 7),
+            'tiou_thresholds': tiou_threshold,
             # we will mask out cliff diving
             'empty_label_ids': [],
         }
