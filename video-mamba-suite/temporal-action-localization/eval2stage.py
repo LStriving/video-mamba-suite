@@ -231,7 +231,12 @@ def stage1infer_extractFeature(args):
     cfg['heatmap_type'] = args.heatmap_type
     pprint(cfg)
     args.saveonly = True
-    eval_dataset = make_dataset(cfg['dataset_name'], False, cfg['val_split'],
+    if args.train_set:
+        eval_dataset = make_dataset(
+            cfg['dataset_name'], False, cfg['train_split'], **cfg['dataset']
+        )
+    else:
+        eval_dataset = make_dataset(cfg['dataset_name'], False, cfg['val_split'],
                                 **cfg['dataset'])
     eval_db_vars = eval_dataset.get_attributes()
     # get action id dict from json file
@@ -298,6 +303,7 @@ def stage1infer_extractFeature(args):
             video_root = args.video_root
             assert os.path.isdir(video_root), "Video root does not exist!"
             if args.heatmap_branch in ['rgb', 'flow'] or not args.heatmap:
+                print("====Loading I3D Model=====")
                 initI3ds(args)
             # extract features
             new_feat_center = extract_features_from_res(video_root, new_feat_path, args.flow_dir, result, cfg)
@@ -531,11 +537,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                     # resize video
                     rgb_data=torch.from_numpy(rgb_data) 
                     if rgb_data.shape[1]!=IMAGE_SIZE or rgb_data.shape[2]!=IMAGE_SIZE:
-                        rgb_data_tmp=torch.zeros(rgb_data.shape[0:1]+(IMAGE_SIZE,IMAGE_SIZE,3)).float()
-                        for index,rgb_data in enumerate(rgb_data):
-                            rgb_datum_tmp=torch.from_numpy(cv2.resize(rgb_data.numpy(),(IMAGE_SIZE,IMAGE_SIZE))).float()
-                            rgb_data_tmp[index,:,:,:]=rgb_datum_tmp
-                        rgb_data=rgb_data_tmp
+                        rgb_data = resize_data(rgb_data, IMAGE_SIZE)
                     rgb_data=rgb_data.view(-1,IMAGE_SIZE,IMAGE_SIZE,3) / 127.5 - 1
                     rgb_data=rgb_data.float()
                     preprocess = None
@@ -546,11 +548,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                 if flow_dir is not None:
                     flow_data=get_flow_frames_from_targz(os.path.join(flow_dir, f"{video_id}.tar.gz"))
                     if flow_data.shape[1]!=IMAGE_SIZE or flow_data.shape[2]!=IMAGE_SIZE:
-                        flow_data_tmp=torch.zeros(flow_data.shape[0:1]+(IMAGE_SIZE,IMAGE_SIZE,2)).float()
-                        for index,flow_data in enumerate(flow_data):
-                            flow_datum_tmp=torch.from_numpy(cv2.resize(flow_data.numpy(),(IMAGE_SIZE,IMAGE_SIZE))).float()
-                            flow_data_tmp[index,:,:,:]=flow_datum_tmp
-                        flow_data=flow_data_tmp
+                        flow_data = resize_data(flow_data, IMAGE_SIZE)
                     flow_data=flow_data.view(-1,IMAGE_SIZE,IMAGE_SIZE,2).float()
             else:
                 per_video_rank += 1
@@ -593,8 +591,12 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
         if os.path.isfile(new_feat_file):
             continue
         # extract features
-        extract_features(rgb_data, flow_data, new_feat_file, 
-            start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP, preprocess=preprocess, cropped=cfg['cropped_videos'], branch=cfg['heatmap_branch'])
+        if cfg['heatmap']:
+            extract_features(rgb_data, flow_data, new_feat_file, 
+                start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP, preprocess=preprocess, cropped=cfg['cropped_videos'], branch=cfg['heatmap_branch'])
+        else:
+            extract_features(rgb_data, flow_data, new_feat_file, 
+                start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP, preprocess=preprocess, cropped=cfg['cropped_videos'])
         # if len(new_feats) == 2: # debug
         #     build_tmp_json(cfg, new_feats)
     return new_feats
@@ -760,6 +762,13 @@ def initI3ds(args):
     i3d_rgb.cuda()
     i3d_flow.cuda()
 
+def resize_data(data, image_size):
+    data_tmp=torch.zeros(data.shape[0:1]+(image_size,image_size,data.shape[-1])).float()
+    for index, datum in enumerate(data):
+        datum_tmp = torch.from_numpy(cv2.resize(datum.numpy(),(image_size,image_size))).float()
+        data_tmp[index,:,:,:] = datum_tmp
+    return data_tmp
+
 def get_best_pth_from_dir(dir,key='performance') -> str:
     assert os.path.isdir(dir), "Directory does not exist!"
     ckpts = os.listdir(dir)
@@ -829,7 +838,7 @@ if __name__ == '__main__':
     parser.add_argument("--rgb_i3d", type=str, metavar='DIR', default='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/pretrained/pretrained_swallow_i3d.pth', help='path to rgb i3d model')
     parser.add_argument("--raise_error", action='store_true', help="raise error when video reading error")
     parser.add_argument("--test_first_stage", action='store_true', help="test first stage on AllTime")
-    parser.add_argument("--heatmap", action='store_true', help="use heatmap as input")
+    parser.add_argument("--heatmap", action='store_true', help="use heatmap as input") #TODO: better remove it with re-implementation
     parser.add_argument("--cropped_videos", action='store_true', help="use cropped videos instead of reading from whole vidoe")
     parser.add_argument("--heatmap_dir", type=str, metavar='DIR', default='tmp/heatmaps', help='desired save path to heatmap dir, use it when cropped_videos is True')
     parser.add_argument("--image_size", type=int, default=128, help='image size for heatmap')
