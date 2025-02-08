@@ -86,6 +86,41 @@
             ]
         },
         {
+            "name": "Debug eval2tower.py (vw=0.6)",
+            "type": "python",
+            "request": "launch",
+            "program": "eval2tower.py",
+            "args": [
+                "--config2",
+                "configs/2stage/2tower/crossmamba/vw_channelagg/mamba_swallow_i3d_secondstage_2tower_crossmamba_l3_ep30_acu4_loadheatmap_vw0.6.yaml",
+                "--config3",
+                "configs/2stage/heatmap/e2e/mamba/video_mamba/heatmap_secondstage_videomamba_l3_avgtoken_ep45_sigma4_hid576_noact.yaml",
+                "--re-extract",
+                "--ckpt2",
+                "./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap_channelagg/", // 替换为实际路径
+                "--cache_dir",
+                "tmp/train_threshold0.23",
+                "--heatmap_dir",
+                "tmp/raw_train_heatmap_sigma4_p0.23",
+                "--heatmap",
+                "--heatmap_sigma",
+                "4",
+                "--heatmap_branch",
+                "none",
+                "--heatmap_size",
+                "56",
+                "--image_size",
+                "128",
+                "--train_set",
+                "--result_path",
+                "outputs/best_train",
+                "--tower_name",
+                "CrossMambaEarlyFusion"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
             "name": "Train: mamba swallow stage2 3modal",
             "type": "python",
             "request": "launch",
