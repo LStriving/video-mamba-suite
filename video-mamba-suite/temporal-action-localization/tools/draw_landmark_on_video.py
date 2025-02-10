@@ -108,7 +108,7 @@ def main(args):
         os.path.join(args.save_path, f'keypoint_{video_name}.mp4'),
         copied_video_data,
         inputdict = {'-r':str(fps)},
-        outputdict={'-r': str(fps)}  # Replace '30' with your desired FPS
+        outputdict={'-r': str(fps)}
     )
     
 if __name__ == '__main__':
