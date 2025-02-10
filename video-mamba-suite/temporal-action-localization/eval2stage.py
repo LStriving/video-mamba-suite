@@ -42,19 +42,15 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
         ckpt_file = args.ckpt
     else:
         assert os.path.isdir(args.ckpt), "CKPT file folder does not exist!"
-        if args.epoch > 0:
-            ckpt_file = os.path.join(args.ckpt,
-                                     'epoch_{:03d}.pth.tar'.format(args.epoch))
-        else:
-            ckpt_file_list = sorted(
-                glob.glob(os.path.join(args.ckpt, '*.pth.tar')))
-            ckpt_file = ckpt_file_list[-1]
+        ckpt_file_list = sorted(
+            glob.glob(os.path.join(args.ckpt, '*.pth.tar')))
+        ckpt_file = ckpt_file_list[-1]
         assert os.path.exists(ckpt_file)
     """1. fix all randomness"""
     # fix the random seeds (this will fix everything)
     _ = fix_random_seed(0, include_cuda=True)
     """2. create dataset / dataloader"""
-    if args.train_set:
+    if getattr(args, 'train_set', False):
         val_dataset = make_dataset(cfg['dataset_name'], False, cfg['train_split'],
                                    **cfg['dataset'])
     else:
@@ -193,7 +189,7 @@ def main(args):
             # extract features for perfect stage 1
             cfg['cache_dir'] = args.perfect_stage1
             os.makedirs(args.perfect_stage1, exist_ok=True)
-            perfect_result = build_perfect_stage1_results(eval_dataset.json_file, cfg['val_split'])
+            perfect_result = build_perfect_stage1_results(eval_dataset.json_file, cfg['val_split'], args.seg_duration)
             if args.heatmap_branch in ['rgb', 'flow'] or not args.heatmap:
                 initI3ds(args)
             perfect_feat_center = extract_features_from_res(args.video_root, args.perfect_stage1, args.flow_dir, perfect_result, cfg)
@@ -452,7 +448,7 @@ def shift_result(new_feat_center, results, seg_duration):
     return results
 
 
-def build_perfect_stage1_results(json_file, split='test'):
+def build_perfect_stage1_results(json_file, split='test', seg_duration=4.004):
     # {video-id:[], t-start:[], t-end:[], score:[], label:[]}
     with open(json_file, 'r') as f:
         gt = json.load(f)
@@ -478,8 +474,8 @@ def build_perfect_stage1_results(json_file, split='test'):
             start = action['segment'][0]
             end = action['segment'][1]
             center = (start + end) / 2
-            new_start = max(0, center - args.seg_duration / 2)
-            new_end = min(video_info['duration'], center + args.seg_duration / 2)
+            new_start = max(0, center - seg_duration / 2)
+            new_end = min(video_info['duration'], center + seg_duration / 2)
             rank += 1
             all_time_seg['video-id'].append(video_name)
             all_time_seg['t-start'].append(new_start)
@@ -635,18 +631,18 @@ def get_flow_frames_from_targz(tar_dir):
     with tarfile.open(tar_dir) as tar:
         mems=sorted(tar.getmembers(),key=lambda x:x.path)
         for x in mems:
-           if(x.size==0):
-               continue
-           filelikeobject=tar.extractfile(x)
-           r=filelikeobject.read()
-           bytes_stream = io.BytesIO(r)
-           roiimg=Image.open(bytes_stream)
-           nparr=np.array(roiimg,dtype=np.float64)
-           norm_data=nparr/127.5-1
-           if(x.path.split("/")[1]=="u"):
-               list_u.append(torch.tensor(norm_data))
-           else:
-               list_v.append(torch.tensor(norm_data))
+            if(x.size==0):
+                continue
+            filelikeobject=tar.extractfile(x)
+            r=filelikeobject.read()
+            bytes_stream = io.BytesIO(r)
+            roiimg=Image.open(bytes_stream)
+            nparr=np.array(roiimg,dtype=np.float64)
+            norm_data=nparr/127.5-1
+            if(x.path.split("/")[1]=="u"):
+                list_u.append(torch.tensor(norm_data))
+            else:
+                list_v.append(torch.tensor(norm_data))
     res_tensor=torch.stack([torch.stack(list_u),torch.stack(list_v)],dim=3)
     return res_tensor
 
