@@ -10,6 +10,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.utils.data
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 # for visualization
 from torch.utils.tensorboard import SummaryWriter
 
@@ -31,7 +34,19 @@ def get_cfg(config_file):
     pprint(cfg)
     return cfg
 
-def run(cfg, cfg2, args, action_label=None):
+def setup(rank, world_size):
+    """初始化DDP进程组"""
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # 初始化进程组
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    """清理DDP进程组"""
+    dist.destroy_process_group()
+
+def run(cfg, cfg2, args, action_label=None, rank=0, world_size=1):
     """1. get configuration from a yaml file"""
     args.start_epoch = 0
     # prep for output folder (based on time stamp)
@@ -47,17 +62,24 @@ def run(cfg, cfg2, args, action_label=None):
         ckpt_folder = os.path.join(
             cfg['output_folder'], cfg_filename + '_' + cfg2_filename + '_' + \
                 str(args.output)+'_'+str(cfg['loader']['batch_size'])+'_'+str(cfg['opt']['learning_rate']))
-    if not os.path.exists(ckpt_folder):
+    if rank == 0 and not os.path.exists(ckpt_folder):
         os.mkdir(ckpt_folder)
-    # tensorboard writer
-    tb_writer = SummaryWriter(os.path.join(ckpt_folder, 'logs'))
+    
+    # 确保所有进程等待主进程创建目录
+    if world_size > 1:
+        dist.barrier()
+    
+    # tensorboard writer (只在主进程上创建)
+    tb_writer = None
+    if rank == 0:
+        tb_writer = SummaryWriter(os.path.join(ckpt_folder, 'logs'))
 
     # fix the random seeds (this will fix everything)
-    rng_generator = fix_random_seed(cfg['init_rand_seed'], include_cuda=True)
+    rng_generator = fix_random_seed(cfg['init_rand_seed'] + rank, include_cuda=True)
 
     # re-scale learning rate / # workers based on number of GPUs
-    cfg['opt']["learning_rate"] *= len(cfg['devices'])
-    cfg['loader']['num_workers'] *= len(cfg['devices'])
+    cfg['opt']["learning_rate"] *= world_size
+    cfg['loader']['num_workers'] = max(1, cfg['loader']['num_workers'] // world_size)
     cfg['loader']['accum_steps'] = 1 if cfg['loader']['accum_steps'] <= 0 else cfg['loader']['accum_steps']
     
     cfg2['video_stem']['num_frames'] = cfg2['dataset']['num_frames']
@@ -80,9 +102,20 @@ def run(cfg, cfg2, args, action_label=None):
     # multi-modal dataloader
     mulmodal_dataset = MultiModalDataset(train_dataset, train_dataset2)
     
-    # data loaders
+    # 创建DDP采样器
+    if world_size > 1:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            mulmodal_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True
+        )
+    else:
+        train_sampler = None
+    
+    # 修改数据加载器以使用DDP采样器
     train_loader = make_data_loader(
-        mulmodal_dataset, True, rng_generator, **cfg['loader'])
+        mulmodal_dataset, True, rng_generator, sampler=train_sampler, **cfg['loader'])
     
     """3. create model, optimizer, and scheduler"""
     # model
@@ -93,22 +126,22 @@ def run(cfg, cfg2, args, action_label=None):
     if args.backbone_1:
         if os.path.isfile(args.backbone_1):
             checkpoint = torch.load(args.backbone_1,
-                map_location = lambda storage, loc: storage.cuda(
-                    cfg['devices'][0]))
+                map_location = lambda storage, loc: storage.cuda(rank))
             new_kv = {}
             for k,v in checkpoint['state_dict_ema'].items():
                 new_kv[k.replace("module.","")]=v
             model.load_state_dict(new_kv)
-            print("=> loaded checkpoint '{:s}' for tower 1".format(args.backbone_1))
+            if rank == 0:
+                print("=> loaded checkpoint '{:s}' for tower 1".format(args.backbone_1))
             del checkpoint
         else:
-            print("=> no checkpoint found at '{}'".format(args.backbone_1))
+            if rank == 0:
+                print("=> no checkpoint found at '{}'".format(args.backbone_1))
             return
     if args.backbone_2:
         if os.path.isfile(args.backbone_2):
             checkpoint = torch.load(args.backbone_2,
-                map_location = lambda storage, loc: storage.cuda(
-                    cfg2['devices'][0]))
+                map_location = lambda storage, loc: storage.cuda(rank))
             new_kv = {}
             for k,v in checkpoint['state_dict_ema'].items():
                 new_kv[k.replace("module.","")]=v
@@ -117,27 +150,35 @@ def run(cfg, cfg2, args, action_label=None):
                 model2.load_state_dict(new_kv, strict=False)
             else:
                 model2.load_state_dict(new_kv)
-            print("=> loaded checkpoint '{:s}' for tower 2".format(args.backbone_2))
+            if rank == 0:
+                print("=> loaded checkpoint '{:s}' for tower 2".format(args.backbone_2))
             del checkpoint
         else:
-            print("=> no checkpoint found at '{}'".format(args.backbone_2))
+            if rank == 0:
+                print("=> no checkpoint found at '{}'".format(args.backbone_2))
 
 
     # two-tower model
     model = make_two_tower(args.tower_name, model, model2, cfg, cfg2, **cfg['two_tower'])
 
-    # not ideal for multi GPU training, ok for now
+    # 将模型移动到对应设备
     if not args.cpu:
-        model = nn.DataParallel(model, device_ids=cfg['devices'])
+        torch.cuda.set_device(rank)
+        model.cuda(rank)
+    
+    # 使用DDP包装模型
+    if world_size > 1:
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+    
     # optimizer
     optimizer = make_optimizer(model, cfg['opt'], args.filter_backbone2, args.lower_ckpt_lr_rate)
     # schedule
-    # TODO: check if this is correct (LAST batch)
     num_iters_per_epoch = len(train_loader) // cfg['loader']['accum_steps'] 
     scheduler = make_scheduler(optimizer, cfg['opt'], num_iters_per_epoch)
 
     # enable model EMA
-    print("Using model EMA ...")
+    if rank == 0:
+        print("Using model EMA ...")
     model_ema = ModelEma(model)
 
     """4. Resume from model / Misc"""
@@ -155,29 +196,31 @@ def run(cfg, cfg2, args, action_label=None):
         if ckpt_file is not None:
             # load ckpt, reset epoch / best rmse
             checkpoint = torch.load(ckpt_file,
-                map_location = lambda storage, loc: storage.cuda(
-                    cfg['devices'][0]))
+                map_location = lambda storage, loc: storage.cuda(rank))
             args.start_epoch = checkpoint['epoch'] + 1
             model.load_state_dict(checkpoint['state_dict'])
             model_ema.module.load_state_dict(checkpoint['state_dict_ema'])
             # also load the optimizer / scheduler if necessary
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
-            print("=> loaded checkpoint '{:s}' (epoch {:d})".format(
-                ckpt_file, checkpoint['epoch']
-            ))
+            if rank == 0:
+                print("=> loaded checkpoint '{:s}' (epoch {:d})".format(
+                    ckpt_file, checkpoint['epoch']
+                ))
             del checkpoint
 
-    # save the current config
-    with open(os.path.join(ckpt_folder, 'config.txt'), 'w') as fid:
-        pprint('config 1:', fid)
-        pprint(cfg, stream=fid)
-        pprint('config 2:', fid)
-        pprint(cfg2, stream=fid)
-        fid.flush()
+    # save the current config (只在主进程上保存)
+    if rank == 0:
+        with open(os.path.join(ckpt_folder, 'config.txt'), 'w') as fid:
+            pprint('config 1:', fid)
+            pprint(cfg, stream=fid)
+            pprint('config 2:', fid)
+            pprint(cfg2, stream=fid)
+            fid.flush()
 
     """5. training / validation loop"""
-    print("\nStart training model {:s} ...".format(args.tower_name))
+    if rank == 0:
+        print("\nStart training model {:s} ...".format(args.tower_name))
 
     # start training
     max_epochs = cfg['opt'].get(
@@ -194,6 +237,8 @@ def run(cfg, cfg2, args, action_label=None):
     )
     valMultidataset = MultiModalDataset(val_dataset, val_dataset2)
     cfg['loader']['batch_size'] = 1
+    
+    # 验证集不需要分布式采样器
     val_loader = make_data_loader(
         valMultidataset, False, rng_generator, **cfg['loader']
     )
@@ -214,11 +259,16 @@ def run(cfg, cfg2, args, action_label=None):
                 remap = True
                 break
         else:
-            print(f"Warning: {label} not found in eval_label_dict")
+            if rank == 0:
+                print(f"Warning: {label} not found in eval_label_dict")
             remap = True
             break
 
     for epoch in range(args.start_epoch, max_epochs):
+        # 设置采样器的epoch
+        if world_size > 1 and train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+            
         # train for one epoch
         train_one_epoch(
             train_loader,
@@ -228,24 +278,28 @@ def run(cfg, cfg2, args, action_label=None):
             epoch,
             model_ema = model_ema,
             clip_grad_l2norm = cfg['train_cfg']['clip_grad_l2norm'],
-            tb_writer=tb_writer,
+            tb_writer=tb_writer if rank == 0 else None,
             print_freq=args.print_freq,
             accum_step_num=cfg['loader']['accum_steps'],
-            devices=cfg['devices']
+            devices=[rank] if not args.cpu else ['cpu'],
+            rank=rank,
+            world_size=world_size
         )
         
         start_eval = 5 if max_epochs > 30 else 0
 
-        if epoch>=start_eval or not cfg['opt']['warmup']:#(max_epochs//4):
-
+        # 只在主进程上进行评估
+        if rank == 0 and (epoch>=start_eval or not cfg['opt']['warmup']):
             # model
             model_eval = make_meta_arch(cfg['model_name'], **cfg['model'])
             model_eval2 = make_meta_arch(cfg2['model_name'], **cfg2['model'])
             print(f'{args.tower_name} model loaded for evaluation')
             model_eval = make_two_tower(args.tower_name, model_eval, model_eval2, cfg, cfg2, **cfg['two_tower'])
-            # not ideal for multi GPU training, ok for now
-            model_eval = nn.DataParallel(model_eval, device_ids=cfg['devices'])
-            model_eval.load_state_dict(model_ema.module.state_dict())
+            # 移动到GPU
+            if not args.cpu:
+                model_eval.cuda(rank)
+            # 加载EMA模型权重
+            model_eval.load_state_dict(model_ema.module.module.state_dict() if world_size > 1 else model_ema.module.state_dict())
 
             # set up evaluator
             output_file = None
@@ -305,6 +359,7 @@ def run(cfg, cfg2, args, action_label=None):
                     if tb_writer is not None:
                         tb_writer.add_scalar(f'validation/vw{vw}_mAP', mAP, epoch)
 
+            # 保存模型（只在主进程上）
             save_states = {
                 'epoch': epoch,
                 'state_dict': model.state_dict(),
@@ -320,14 +375,37 @@ def run(cfg, cfg2, args, action_label=None):
                 file_name='epoch_{:03d}_{:.5f}.pth.tar'.format(epoch,mAP)
             )
 
+    # 等待所有进程完成
+    if world_size > 1:
+        dist.barrier()
+        
     # wrap up
-    tb_writer.close()
-    print("All done!")
+    if rank == 0 and tb_writer is not None:
+        tb_writer.close()
+        print("All done!")
+    
+    # 清理进程组
+    if world_size > 1:
+        cleanup()
+    
     return
+
+def run_ddp(rank, world_size, cfg, cfg2, args, action_label=None):
+    """DDP进程入口函数"""
+    # 初始化DDP
+    if world_size > 1:
+        setup(rank, world_size)
+    
+    # 设置设备
+    if not args.cpu:
+        cfg['devices'] = [rank]
+        cfg2['devices'] = [rank]
+    
+    # 运行训练
+    run(cfg, cfg2, args, action_label, rank, world_size)
 
 ################################################################################
 def main(args):
-    from torch.multiprocessing import Process, set_start_method
     """main function that handles training / inference"""
     cfg = get_cfg(args.config)
     cfg2 = get_cfg(args.config2)
@@ -351,6 +429,9 @@ def main(args):
     if stage == 1 and cfg['dataset']['two_stage']:
         assert len(action_label) == 1, "Stage 1 only supports one action label!"
 
+    # 获取世界大小（GPU数量）
+    world_size = len(cfg['devices']) if not args.cpu else 1
+    
     if cfg['dataset']['num_classes'] == 1:
         # looping over all actions
         output = args.output
@@ -368,7 +449,7 @@ def main(args):
         ori_backbone_1 = args.backbone_1
         ori_backbone_2 = args.backbone_2
 
-        set_start_method('spawn', force=True)
+        # 使用多进程启动多个动作的训练
         processes = []
         for rank, action in enumerate(action_label):
             # modify the backbone path
@@ -393,27 +474,41 @@ def main(args):
                 ckpt_dir_2 = ckpt_dir_2[0]
                 best_ckpt = get_best_pth_from_dir(os.path.join(ori_backbone_2, ckpt_dir_2))
                 args.backbone_2 = best_ckpt
-            p = Process(target=train_action, args=(cfg, cfg2, args, output, action, rank))
-            p.start()
-            processes.append(p)
-        
-        for p in processes:
-            p.join()
+                
+            # 为每个动作创建一个新的配置副本
+            action_cfg = cfg.copy()
+            action_cfg2 = cfg2.copy()
+            action_cfg['dataset']['desired_actions'] = [action]
+            action_cfg2['dataset']['desired_actions'] = [action]
+            
+            # 设置输出目录
+            output_prefix = f'{action}_'
+            action_args = argparse.Namespace(**vars(args))
+            action_args.output = f'{output_prefix}{output}'
+            
+            # 启动DDP训练
+            if world_size > 1:
+                mp.spawn(
+                    run_ddp,
+                    args=(world_size, action_cfg, action_cfg2, action_args, action),
+                    nprocs=world_size,
+                    join=True
+                )
+            else:
+                # 单GPU情况直接运行
+                run(action_cfg, action_cfg2, action_args, action, 0, 1)
     else:
-        run(cfg, cfg2, args, action_label)
-
-def train_action(cfg, cfg2, args, output, action, rank):
-    output_prefix = f'{action}_'
-    args.output = f'{output_prefix}{output}'
-    cfg['dataset']['desired_actions'] = [action]
-    cfg2['dataset']['desired_actions'] = [action]
-    if args.cpu:
-        cfg['devices'] = ['cpu']
-        cfg2['devices'] = ['cpu']
-    else:
-        cfg['devices'] = [f'cuda:{rank}']
-        cfg2['devices'] = [f'cuda:{rank}']
-    run(cfg, cfg2, args, action)
+        # 多类别情况
+        if world_size > 1:
+            mp.spawn(
+                run_ddp,
+                args=(world_size, cfg, cfg2, args, action_label),
+                nprocs=world_size,
+                join=True
+            )
+        else:
+            # 单GPU情况直接运行
+            run(cfg, cfg2, args, action_label, 0, 1)
 
 ################################################################################
 if __name__ == '__main__':
@@ -446,5 +541,7 @@ if __name__ == '__main__':
     parser.add_argument('--filter_backbone2', default=None, type=str,
                         help='filter backbone 2')
     parser.add_argument("--lower_ckpt_lr_rate", type=float, default=1.0, help="lr ratio for the ckpt part (default: 1.0)")
+    parser.add_argument('--local_rank', type=int, default=0, help='Local rank for distributed training')
+
     args = parser.parse_args()
     main(args)

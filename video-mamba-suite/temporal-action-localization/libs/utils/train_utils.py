@@ -18,6 +18,7 @@ from .postprocessing import postprocess_results
 from ..modeling import MaskedConv1D, Scale, AffineDropPath, LayerNorm
 from tqdm import tqdm
 import json
+import torch.distributed as dist
 
 ################################################################################
 def fix_random_seed(seed, include_cuda=True):
@@ -294,6 +295,9 @@ def train_one_epoch(
     tb_writer = None,
     print_freq = 20,
     accum_step_num= -1,
+    devices=None,
+    rank=0,
+    world_size=1,
 ):
     """Training the model for one epoch"""
     # set up meters
@@ -307,7 +311,8 @@ def train_one_epoch(
         accum_step_num = 1
 
     # main training loop
-    print("\n[Train]: Epoch {:d} started".format(curr_epoch))
+    if rank == 0:
+        print("\n[Train]: Epoch {:d} started".format(curr_epoch))
     start = time.time()
     for iter_idx, video_list in (enumerate(train_loader, 0)):
         if (iter_idx + 1) % accum_step_num == 0:
@@ -346,10 +351,22 @@ def train_one_epoch(
                 # update
                 losses_tracker[key].update(value.item())
 
-            # log to tensor board
+            # 在分布式训练中同步损失值
+            if world_size > 1:
+                for key in losses_tracker.keys():
+                    # 创建一个包含当前进程损失值的张量
+                    loss_tensor = torch.tensor(losses_tracker[key].avg).cuda(rank)
+                    # 在所有进程间同步并计算平均值
+                    dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
+                    # 更新为所有进程的平均值
+                    losses_tracker[key].avg = loss_tensor.item() / world_size
+                    if key == 'final_loss':
+                        losses_tracker[key].val = loss_tensor.item() / world_size
+
+            # log to tensor board (只在主进程上)
             lr = scheduler.get_last_lr()[0]
             global_step = curr_epoch * num_iters + iter_idx
-            if tb_writer is not None:
+            if tb_writer is not None and rank == 0:
                 # learning rate (after stepping)
                 tb_writer.add_scalar(
                     'train/learning_rate',
@@ -373,29 +390,35 @@ def train_one_epoch(
                     global_step
                 )
 
-            # print to terminal
-            block1 = 'Epoch: [{:03d}][{:05d}/{:05d}]'.format(
-                curr_epoch, iter_idx, num_iters
-            )
-            block2 = 'Time {:.2f} ({:.2f})'.format(
-                batch_time.val, batch_time.avg
-            )
-            block3 = 'Loss {:.2f} ({:.2f})\n'.format(
-                losses_tracker['final_loss'].val,
-                losses_tracker['final_loss'].avg
-            )
-            block4 = ''
-            for key, value in losses_tracker.items():
-                if key != "final_loss":
-                    block4  += '\t{:s} {:.2f} ({:.2f})'.format(
-                        key, value.val, value.avg
-                    )
+            # 只在主进程上打印
+            if rank == 0:
+                block1 = 'Epoch: [{:03d}][{:05d}/{:05d}]'.format(
+                    curr_epoch, iter_idx, num_iters
+                )
+                block2 = 'Time {:.2f} ({:.2f})'.format(
+                    batch_time.val, batch_time.avg
+                )
+                block3 = 'Loss {:.2f} ({:.2f})'.format(
+                    losses_tracker['final_loss'].val,
+                    losses_tracker['final_loss'].avg
+                )
+                block4 = ''
+                for key, value in losses_tracker.items():
+                    if key != "final_loss":
+                        block4  += '\t{:s} {:.2f} ({:.2f})'.format(
+                            key, value.val, value.avg
+                        )
 
-            # print('\t'.join([block1, block2, block3, block4]))
+                print('\t'.join([block1, block2, block3]) + '\n' + block4)
 
-    # finish up and print
-    lr = scheduler.get_last_lr()[0]
-    # print("[Train]: Epoch {:d} finished with lr={:.8f}\n".format(curr_epoch, lr))
+    # 在分布式训练中同步所有进程
+    if world_size > 1:
+        dist.barrier()
+        
+    # 只在主进程上打印
+    if rank == 0:
+        lr = scheduler.get_last_lr()[0]
+        print("[Train]: Epoch {:d} finished with lr={:.8f}\n".format(curr_epoch, lr))
     return
 
 

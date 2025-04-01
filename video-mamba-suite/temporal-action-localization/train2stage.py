@@ -296,6 +296,8 @@ def get_label_dict_from_file(json_file, action_label):
     import json
     with open(json_file, 'r') as fid:
         data = json.load(fid)
+    if 'database' in data:
+        data = data['database']
     label_dict = {}
     
     for _, v in data.items():
