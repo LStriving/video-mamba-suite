@@ -179,10 +179,7 @@ def run(cfg, cfg2, args, action_label=None, rank=0, world_size=1):
     # enable model EMA
     if rank == 0:
         print("Using model EMA ...")
-    if world_size > 1:
-        model_ema = ModelEma(model.module)
-    else:
-        model_ema = ModelEma(model)
+    model_ema = ModelEma(model)
 
     """4. Resume from model / Misc"""
     # resume from a checkpoint?
@@ -300,7 +297,7 @@ def run(cfg, cfg2, args, action_label=None, rank=0, world_size=1):
             model_eval = make_two_tower(args.tower_name, model_eval, model_eval2, cfg, cfg2, **cfg['two_tower'])
             # 移动到GPU
             if not args.cpu: # ok for now
-                model_eval = nn.DataParallel(model_eval, device_ids='cuda:0')
+                model_eval = nn.DataParallel(model_eval, device_ids=['cuda:0'])
             # 加载EMA模型权重
             model_eval.load_state_dict(model_ema.module.state_dict())
 

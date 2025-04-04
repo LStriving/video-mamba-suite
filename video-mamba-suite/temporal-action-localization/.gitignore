@@ -20,3 +20,5 @@ tmp/
 
 *.csv
 *result*
+data/
+analysis/*.png
