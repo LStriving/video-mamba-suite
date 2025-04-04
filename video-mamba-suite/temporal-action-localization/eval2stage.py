@@ -175,6 +175,7 @@ def main(args):
         cfg['heatmap_size'] = args.heatmap_size
         cfg['heatmap_branch'] = args.heatmap_branch
         cfg['heatmap'] = args.heatmap
+        cfg['kalman'] = args.kalman
         cfg['keypoint']['sigma'] = args.heatmap_sigma if args.heatmap else cfg['keypoint']['sigma']
         if os.path.isfile(save_cache_path):
             print(f"Loading cache from {save_cache_path}")
@@ -225,6 +226,7 @@ def stage1infer_extractFeature(args):
     cfg['keypoint']['sigma'] = args.heatmap_sigma
     cfg['seg_duration'] = args.seg_duration
     cfg['heatmap_type'] = args.heatmap_type
+    cfg['kalman'] = args.kalman
     pprint(cfg)
     args.saveonly = True
     if args.train_set:
@@ -491,6 +493,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
     CLIP_DUR = cfg['seg_duration']
     WINDOW_SIZE = cfg['dataset']['num_frames']
     WINDOW_STEP = cfg['dataset']['feat_stride']
+    kalman = True if cfg['kalman'].lower() == 'true' else False
     # get center and extend 
     cache_video_id = None
     rgb_data = None
@@ -568,7 +571,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
 
                 # extract heatmap
                 processor = VideoKeypointProcessor(cfg['keypoint']['model_path'], sigma=cfg['keypoint']['sigma'])
-                _, _, cropped_fusion = processor.infer_heatmaps(output_path)
+                _, _, cropped_fusion = processor.infer_heatmaps(output_path, kalman=kalman)
                 # save heatmap
                 os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
                 np.save(heatmap_path, cropped_fusion)
@@ -849,6 +852,7 @@ if __name__ == '__main__':
     parser.add_argument("--last_epoch", action='store_true', help='use last epoch to evaluate(default: best epoch)')
     parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
+    parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
     args = parser.parse_args()
     main(args)
     # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt

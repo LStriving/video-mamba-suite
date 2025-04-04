@@ -330,8 +330,8 @@ class VideoKeypointProcessor:
 
         return self.keypoints, self.confidences
     
-    def infer_heatmaps(self, video_array):
-        keypoints, confidences, h, w = self.infer_keypoints(video_array, kalman=True)
+    def infer_heatmaps(self, video_array, kalman=True):
+        keypoints, confidences, h, w = self.infer_keypoints(video_array, kalman=kalman)
         keypoints[:, :, 0] *= w
         keypoints[:, :, 1] *= h  
         cnt = keypoints.shape[0]
@@ -424,36 +424,98 @@ class VideoKeypointProcessor:
 # Example usage
 if __name__ == "__main__":
     
-    video_path = "test_video.mp4"
+    # video_path = "test_video.mp4"
     model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt"
     processor = VideoKeypointProcessor(model_path)
-    video_array = skvideo.io.vread(video_path)
-    print(video_array.shape) # (86, 612, 612, 3)
-    # keypoints, confidences = processor.process_video(video_path, video_output_path='out_video.avi')
-    cropped_keypoint, cropped_edge, cropped_fusion = processor.infer_heatmaps(video_array)
-    print(cropped_fusion.shape)
-    # cropped_fusion: [N, H, W]
+    # video_array = skvideo.io.vread(video_path)
+    # print(video_array.shape) # (86, 612, 612, 3)
+    # # keypoints, confidences = processor.process_video(video_path, video_output_path='out_video.avi')
+    # cropped_keypoint, cropped_edge, cropped_fusion = processor.infer_heatmaps(video_array)
+    # print(cropped_fusion.shape)
+    # # cropped_fusion: [N, H, W]
     
-    # heatmaps转tensor的用法
-    # heatmaps_tensor = torch.from_numpy(cropped_fusion)
-    # heatmaps_tensor = heatmaps_tensor.unsqueeze(1)
-    # resized_tensor = F.interpolate(heatmaps_tensor, size=(56, 56), mode='bilinear', align_corners=False) # 120, 1, 56, 56
-    # resized_tensor = resized_tensor.repeat(1, 3, 1, 1) # 120,3,56,56 dtype=torch.float32
+    # # heatmaps转tensor的用法
+    # # heatmaps_tensor = torch.from_numpy(cropped_fusion)
+    # # heatmaps_tensor = heatmaps_tensor.unsqueeze(1)
+    # # resized_tensor = F.interpolate(heatmaps_tensor, size=(56, 56), mode='bilinear', align_corners=False) # 120, 1, 56, 56
+    # # resized_tensor = resized_tensor.repeat(1, 3, 1, 1) # 120,3,56,56 dtype=torch.float32
     
     
-    # heatmaps的可视化
-    heatmaps = (cropped_fusion * 255).astype(np.uint8)[..., np.newaxis]
-    # 视频输出路径和设置
-    output_path = "test_api_npy.mp4"
-    fps = 30  # 设置帧率为 30fps
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 使用 mp4v 编码器
+    # # heatmaps的可视化
+    # heatmaps = (cropped_fusion * 255).astype(np.uint8)[..., np.newaxis]
+    # # 视频输出路径和设置
+    # output_path = "test_api_npy.mp4"
+    # fps = 30  # 设置帧率为 30fps
+    # fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 使用 mp4v 编码器
     
-    height, width = heatmaps.shape[1], heatmaps.shape[2]  # 高度和宽度来自 heatmaps 的形状
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height), isColor=False)  # isColor=False 处理灰度图像
+    # height, width = heatmaps.shape[1], heatmaps.shape[2]  # 高度和宽度来自 heatmaps 的形状
+    # out = cv2.VideoWriter(output_path, fourcc, fps, (width, height), isColor=False)  # isColor=False 处理灰度图像
 
-    # 将每一帧写入视频
-    for frame in heatmaps:
-        out.write(frame.astype(np.uint8))  # 将每一帧写入视频
+    # # 将每一帧写入视频
+    # for frame in heatmaps:
+    #     out.write(frame.astype(np.uint8))  # 将每一帧写入视频
 
-    # 释放资源
-    out.release()
+    # # 释放资源
+    # out.release()
+
+    # Use multiprocess to extract heatmap without kalman
+    # Single processor version for processing videos
+    def process_single_video(obj, video_path, output_root, kalman, selected_index, output_size=None):
+        base_name = os.path.basename(video_path).split(".avi")[0]
+        save_np = f'{base_name}.npy'
+        os.makedirs(output_root, exist_ok=True)
+        save_path = os.path.join(output_root, save_np)
+        
+        # Extract heatmap data
+        data = obj.infer_heatmaps(video_path, kalman)[selected_index]
+        
+        # Resize if needed
+        if output_size is not None:
+            resized_data = np.zeros((data.shape[0], output_size[0], output_size[1]), dtype=np.float32)
+            for i, frame in enumerate(data):
+                resized_data[i] = cv2.resize(frame, output_size)
+            data = resized_data
+            
+        # Save the processed data
+        np.save(save_path, data)
+        return save_path
+    
+    # Process all videos in sequence
+    def process_all_videos(obj, input_root, input_file, output_root, kalman, 
+                          selected_index, resume=True, output_size=None):
+        # Read video list from file
+        with open(input_file, 'r') as f:
+            data = f.readlines()
+        
+        videos = [os.path.join(input_root, f'{i.strip()}.avi') for i in data if i.strip() != '']
+        print(f'Total {len(videos)} videos to process.')
+        
+        results = []
+        for video in tqdm(videos, desc="Processing heatmaps"):
+            # Skip if file exists and resume is enabled
+            save_path = os.path.join(output_root, f'{os.path.basename(video).split(".avi")[0]}.npy')
+            if resume and os.path.exists(save_path):
+                try:
+                    np.load(save_path)
+                    results.append(None)
+                    continue
+                except Exception:
+                    pass
+            
+            # Process the video
+            result = process_single_video(obj, video, output_root, kalman, selected_index, output_size)
+            results.append(result)
+        
+        return results
+    
+    # Process videos
+    results = process_all_videos(
+        obj=processor,
+        input_root='/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas/',
+        input_file='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt',
+        output_root='/mnt/cephfs/dataset/swallow_heatmap56_sigma4_nokalman',
+        kalman=False,
+        selected_index=-1,
+        output_size=(56,56),
+    )
+    

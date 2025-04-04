@@ -331,10 +331,10 @@ class VideoKeypointProcessor:
         elif kalman:
             return self.keypoints, confidences, h, w
 
-        return self.keypoints, self.confidences
+        return self.keypoints, self.confidences, h, w
     
-    def infer_heatmaps(self, video_path):
-        keypoints, confidences, h, w = self.infer_keypoints(video_path, kalman=True)
+    def infer_heatmaps(self, video_path, kalman=True):
+        keypoints, confidences, h, w = self.infer_keypoints(video_path, kalman=kalman)
         keypoints[:, :, 0] *= w
         keypoints[:, :, 1] *= h  
         cnt = keypoints.shape[0]
@@ -431,7 +431,7 @@ class HumanKeypointProcessor:
                  video_ext='.mp4',frame_height=1080,frame_width=900,skeleton_num=133):
         self.pred_root = pred_root
         self.pred_path = os.listdir(pred_root)
-        self.pred_path = [os.path.join(pred_root, i) for i in self.pred_path if '.json' in i]
+        self.pred_path = [os.path.join(pred_root, i) for i in self.pred_path if '.json' in i and self.contains(i, splits)]
         self.video_root = video_root
         self.split = splits
         if video_root is not None:
@@ -448,6 +448,13 @@ class HumanKeypointProcessor:
         self.skeleton = skeleton if skeleton is not None else \
             np.array(self._get_mapping())
 
+    @staticmethod
+    def contains(long_str, inlist):
+        for item in inlist:
+            if item in long_str:
+                return True
+        return False
+    
     def _get_mapping(self):
         keypoint_info={
             0:
@@ -1732,11 +1739,11 @@ class HumanKeypointProcessor:
         
 # Example usage
 if __name__ == "__main__":
-    from multiprocessing import Pool
+    
     # video_path = "/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/result/datas/10_104_2020101202_li3ning2_cha2ti3_2020_10_13_105820_32.avi"
     # video_path = "test_video.mp4"
-    # model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt"
-    # processor = VideoKeypointProcessor(model_path)
+    model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt"
+    processor = VideoKeypointProcessor(model_path)
     # cropped_keypoint, cropped_edge, cropped_fusion = processor.infer_heatmaps(video_path)
     # # cropped_fusion: [N, H, W]
     
@@ -1763,71 +1770,137 @@ if __name__ == "__main__":
 
     # # 释放资源
     # out.release()
-    processer = HumanKeypointProcessor(
-        pred_root='/mnt/cephfs/home/liyirui/project/mmpose/predictions',
-        video_root=None,
-        skeleton=None,
-        sigma=1
-    )
-    # cropped_keypoint, cropped_edge, cropped_fusion = processer.get_heatmap(23, kalman=False)
-    # # plot cropped_fusion
-    # import matplotlib as mpl
-    # import matplotlib.pyplot as plt
-    # plt.imsave('tmp/human_heatmap.jpg', cropped_fusion[23])
-    # print(f'saved vis to tmp/human_heatmap.jpg')
+    # from multiprocessing import Pool
+    # processer = HumanKeypointProcessor(
+    #     pred_root='/mnt/cephfs/home/liyirui/project/mmpose/predictions',
+    #     video_root=None,
+    #     splits=['val','test'],
+    #     skeleton=None,
+    #     sigma=1
+    # )
+    # def process_item(args):
+    #     id, obj, output_root, kalman, selected_index, resume, output_size = args
+    #     pred_name = obj.pred_path[id]
+    #     base_name = os.path.basename(pred_name).split(".")[0]
+    #     save_np = f'{base_name}.npy'
+    #     output_dir = os.path.join(output_root, f'sigma_{obj.sigma}')
+    #     os.makedirs(output_dir, exist_ok=True)
+    #     save_path = os.path.join(output_dir, save_np)
+        
+    #     if resume and os.path.exists(save_path):
+    #         # try to open it
+    #         try:
+    #             np.load(save_path)
+    #             return None
+    #         except Exception as e:
+    #             ...
+        
+    #     data = obj.get_heatmap(id, kalman)[selected_index]
+    #     if output_size is not None:
+    #         # resize data
+    #         data = resize(data, output_size)
+    #     np.save(save_path, data)
+    #     return save_path
     
-    
-    # import pickle
-    # # Test pickling
-    # try:
-    #     pickle.dumps(processer)  # Should not raise an error
-    #     print("✅ Object is picklable!")
-    # except Exception as e:
-    #     print(f"❌ Pickling failed: {e}")
-    
-    def process_item(args):
-        id, obj, output_root, kalman, selected_index, resume = args
-        pred_name = obj.pred_path[id]
-        base_name = os.path.basename(pred_name).split(".")[0]
+    # def resize(numpy_data, output_size):
+    #     """
+    #     Resize the input numpy array to the specified output size.
+
+    #     Args:
+    #         numpy_data (np.ndarray): The input array to resize.
+    #         output_size (tuple): The desired output size (height, width).
+
+    #     Returns:
+    #         np.ndarray: The resized array.
+    #     """
+    #     from PIL import Image
+
+    #     # 将 NumPy 数组转换为 PIL 图像
+    #     image = Image.fromarray((numpy_data * 255).astype(np.uint8))
+    #     # 调整图像大小
+    #     resized_image = image.resize(output_size, Image.ANTIALIAS)
+    #     # 将调整大小后的图像转换回 NumPy 数组
+    #     resized_data = np.array(resized_image) / 255.0  # 归一化到 [0, 1] 范围
+    #     return resized_data
+
+    # def run_parallel_processing(obj, output_root, kalman, selected_index, resume=True, num_processes=None, output_size=None):
+    #     if num_processes is None:
+    #         num_processes = os.cpu_count()  # Use all available cores
+        
+    #     with Pool(processes=num_processes) as pool:
+    #         args = [(i, obj, output_root, kalman, selected_index, resume, output_size) 
+    #                 for i in range(len(obj.pred_path))]
+            
+    #         results = list(tqdm(
+    #             pool.imap(process_item, args),
+    #             total=len(obj.pred_path),
+    #             desc="Processing heatmaps"
+    #         ))
+        
+    #     return results
+    # # export 
+    # results = run_parallel_processing(
+    #     obj=processer,
+    #     output_root='/mnt/cephfs/dataset/MMA-52/heatmap',
+    #     kalman=False,
+    #     selected_index=-1,
+    # )
+    def process_single_video(obj, video_path, output_root, kalman, selected_index, output_size=None):
+        base_name = os.path.basename(video_path).split(".avi")[0]
         save_np = f'{base_name}.npy'
-        output_dir = os.path.join(output_root, f'sigma_{obj.sigma}')
-        os.makedirs(output_dir, exist_ok=True)
-        save_path = os.path.join(output_dir, save_np)
+        os.makedirs(output_root, exist_ok=True)
+        save_path = os.path.join(output_root, save_np)
         
-        if resume and os.path.exists(save_path):
-            # try to open it
-            try:
-                np.load(save_path)
-                return None
-            except Exception as e:
-                ...
+        # Extract heatmap data
+        data = obj.infer_heatmaps(video_path, kalman)[selected_index]
         
-        data = obj.get_heatmap(id, kalman)[selected_index]
+        # Resize if needed
+        if output_size is not None:
+            resized_data = np.zeros((data.shape[0], output_size[0], output_size[1]), dtype=np.float32)
+            for i, frame in enumerate(data):
+                resized_data[i] = cv2.resize(frame, output_size)
+            data = resized_data
+            
+        # Save the processed data
         np.save(save_path, data)
         return save_path
     
-
-    def run_parallel_processing(obj, output_root, kalman, selected_index, resume=True, num_processes=None):
-        if num_processes is None:
-            num_processes = os.cpu_count()  # Use all available cores
+    # Process all videos in sequence
+    def process_all_videos(obj, input_root, input_file, output_root, kalman, 
+                          selected_index, resume=True, output_size=None):
+        # Read video list from file
+        with open(input_file, 'r') as f:
+            data = f.readlines()
         
-        with Pool(processes=num_processes) as pool:
-            args = [(i, obj, output_root, kalman, selected_index, resume) 
-                    for i in range(len(obj.pred_path))]
+        videos = [os.path.join(input_root, f'{i.strip()}.avi') for i in data if i.strip() != '']
+        print(f'Total {len(videos)} videos to process.')
+        
+        results = []
+        for video in tqdm(videos, desc="Processing heatmaps"):
+            # Skip if file exists and resume is enabled
+            save_path = os.path.join(output_root, f'{os.path.basename(video).split(".avi")[0]}.npy')
+            if resume and os.path.exists(save_path):
+                try:
+                    np.load(save_path)
+                    results.append(None)
+                    continue
+                except Exception:
+                    pass
             
-            results = list(tqdm(
-                pool.imap(process_item, args),
-                total=len(obj.pred_path),
-                desc="Processing heatmaps"
-            ))
+            # Process the video
+            result = process_single_video(obj, video, output_root, kalman, selected_index, output_size)
+            results.append(result)
         
         return results
-    # export 
-    results = run_parallel_processing(
-        obj=processer,
-        output_root='/mnt/cephfs/dataset/MMA-52/heatmap',
+    
+    # Process videos
+    results = process_all_videos(
+        obj=processor,
+        input_root='/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas/',
+        input_file='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt',
+        output_root='/mnt/cephfs/dataset/swallow_heatmap56_sigma4_nokalman',
         kalman=False,
         selected_index=-1,
+        output_size=(56,56),
     )
-    
     
