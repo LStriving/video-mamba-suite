@@ -127,12 +127,10 @@ def run(cfg, cfg2, args, action_label=None):
     model = make_two_tower(args.tower_name, model, model2, cfg, cfg2, **cfg['two_tower'])
 
     # not ideal for multi GPU training, ok for now
-    if not args.cpu:
-        model = nn.DataParallel(model, device_ids=cfg['devices'])
+    model = nn.DataParallel(model, device_ids=cfg['devices'])
     # optimizer
     optimizer = make_optimizer(model, cfg['opt'], args.filter_backbone2, args.lower_ckpt_lr_rate)
     # schedule
-    # TODO: check if this is correct (LAST batch)
     num_iters_per_epoch = len(train_loader) // cfg['loader']['accum_steps'] 
     scheduler = make_scheduler(optimizer, cfg['opt'], num_iters_per_epoch)
 
@@ -237,7 +235,6 @@ def run(cfg, cfg2, args, action_label=None):
         start_eval = 5 if max_epochs > 30 else 0
 
         if epoch>=start_eval or not cfg['opt']['warmup']:#(max_epochs//4):
-
             # model
             model_eval = make_meta_arch(cfg['model_name'], **cfg['model'])
             model_eval2 = make_meta_arch(cfg2['model_name'], **cfg2['model'])
@@ -332,9 +329,9 @@ def main(args):
     cfg = get_cfg(args.config)
     cfg2 = get_cfg(args.config2)
     
-    if args.cpu: # NOTE: mamba not support cpu for now
-        cfg['devices'] = ['cpu']
-        cfg2['devices'] = ['cpu']
+    if args.init_rand_seed is not None:
+        cfg['init_rand_seed'] = args.init_rand_seed
+        cfg2['init_rand_seed'] = args.init_rand_seed
     # get stage
     stage = cfg['dataset']['stage_at']
     assert stage in [1, 2], "Stage must be 1 or 2!"
@@ -407,12 +404,8 @@ def train_action(cfg, cfg2, args, output, action, rank):
     args.output = f'{output_prefix}{output}'
     cfg['dataset']['desired_actions'] = [action]
     cfg2['dataset']['desired_actions'] = [action]
-    if args.cpu:
-        cfg['devices'] = ['cpu']
-        cfg2['devices'] = ['cpu']
-    else:
-        cfg['devices'] = [f'cuda:{rank}']
-        cfg2['devices'] = [f'cuda:{rank}']
+    cfg['devices'] = [f'cuda:{rank}']
+    cfg2['devices'] = [f'cuda:{rank}']
     run(cfg, cfg2, args, action)
 
 ################################################################################
@@ -439,12 +432,11 @@ if __name__ == '__main__':
                         help='path to a checkpoint for tower 2(default: none)')
     parser.add_argument('--tower_name', default='DINOAttnEarlyFusion', type=str,
                         help='name of the two-tower model (default: DINOAttnEarlyFusion)')
-    parser.add_argument('--cpu', action='store_true',
-                        help='use cpu instead of gpu')
     parser.add_argument('--enable_branch_eval', action='store_true',
                         help='enable evaluation for each branch')
     parser.add_argument('--filter_backbone2', default=None, type=str,
                         help='filter backbone 2')
+    parser.add_argument('--init_rand_seed', default=None, help='seed for reproduction', type=int)
     parser.add_argument("--lower_ckpt_lr_rate", type=float, default=1.0, help="lr ratio for the ckpt part (default: 1.0)")
     args = parser.parse_args()
     main(args)

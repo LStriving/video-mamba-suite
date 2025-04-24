@@ -5,16 +5,30 @@ import torch
 import cv2
 import json
 from tqdm import tqdm
+import logging
+import multiprocessing
 
 def resize_video(video_path, output_path, size=(256, 256)):
     # Load video
-    videodata = skvideo.io.vread(video_path)
-    # Resize video
-    resized_videodata = np.zeros((videodata.shape[0], size[0], size[1], 3), dtype=np.uint8)
+    if '.mp4' in video_path or '.avi' in video_path:
+        videodata = skvideo.io.vread(video_path)
+    elif '.npy' in video_path:
+        videodata = np.load(video_path)
+    else:
+        raise ValueError('ext not supported')
+    if videodata.shape[-1] == 3:
+        # Resize video
+        resized_videodata = np.zeros((videodata.shape[0], size[0], size[1], 3), dtype=np.uint8)
+    else:
+        resized_videodata = np.zeros((videodata.shape[0], size[0], size[1]), dtype=np.float32)
     for i, frame in enumerate(videodata):
         resized_videodata[i] = cv2.resize(frame, size)
+    
     # Save video
-    skvideo.io.vwrite(output_path, resized_videodata)
+    if '.mp4' in video_path or '.avi' in video_path:
+        skvideo.io.vwrite(output_path, resized_videodata)
+    elif '.npy' in video_path:
+        np.save(output_path, resized_videodata)
 
 def centercrop_resize_video(video_path, output_path, size=(224, 224)):
     if size[0] == 224:
@@ -50,6 +64,8 @@ def get_file_list(file_path):
     if file_path.endswith('.json'):
         with open(file_path, 'r') as f:
             file_list = json.load(f)
+            if 'database' in file_list:
+                file_list = file_list['database']
         file_list = [file_list.keys()]
     elif file_path.endswith('.txt'):
         with open(file_path, 'r') as f:
@@ -60,22 +76,55 @@ def get_file_list(file_path):
 
 def resize_videos(input_dir, output_dir, size=(256, 256), file_ext='.avi', filter_file=None, resume=False):
     os.makedirs(output_dir, exist_ok=True)
+    logging.basicConfig(level=logging.INFO)
+    
     if filter_file is not None:
         if not os.path.exists(filter_file):
             raise FileNotFoundError(f"Filter file {filter_file} does not exist.")
         else:
             videos = get_file_list(filter_file)
-            print(f"Filtering {len(videos)} videos.")
+            logging.info(f"Filtering {len(videos)} videos.")
     else:
         videos = [video for video in os.listdir(input_dir) if video.endswith(file_ext)]
-    for video_name in tqdm(videos):
-        if not video_name.endswith(file_ext):
-            video_name += file_ext
-        video_path = os.path.join(input_dir, video_name)
-        output_path = os.path.join(output_dir, video_name)
-        if resume and os.path.exists(output_path):
-            continue
-        resize_video(video_path, output_path, size)
+    
+    # 使用 Manager 来共享进度
+    manager = multiprocessing.Manager()
+    progress = manager.Value('i', 0)  # 进度计数器
+    total_videos = len(videos)
+
+    def update_progress():
+        progress.value += 1
+
+    if args.num_workers > 1:
+        pool = multiprocessing.Pool(args.num_workers)
+        for video_name in videos:
+            video_name = str(video_name).strip()
+            if not video_name.endswith(file_ext):
+                video_name += file_ext
+            video_path = os.path.join(input_dir, video_name)
+            output_path = os.path.join(output_dir, video_name)
+            if resume and os.path.exists(output_path):
+                try:
+                    if '.npy' in output_path:
+                        np.load(output_path)
+                    elif '.avi' in output_path:
+                        skvideo.io.vread(output_path)
+                    logging.info(f"Skipping {video_name}, already processed.")
+                    update_progress()  # 更新进度
+                    continue
+                except Exception as e:
+                    ...
+            logging.info(f"Resizing {video_name}...")
+            pool.apply_async(resize_video, args=(video_path, output_path, size), callback=lambda _: update_progress())
+        
+        pool.close()
+        pool.join()
+
+    # 打印最终进度
+    for _ in tqdm(range(total_videos), desc="Processing videos"):
+        while progress.value < total_videos:
+            pass  # 等待所有进程完成
+    logging.info("All videos processed.")
 
 if __name__ == '__main__':
     import argparse
@@ -93,33 +142,13 @@ if __name__ == '__main__':
         resize_video = centercrop_resize_video
     if not os.path.exists(args.input_dir):
         raise FileNotFoundError(f"Input directory {args.input_dir} does not exist.")
-    if args.num_workers > 1:
-        import multiprocessing
-        pool = multiprocessing.Pool(args.num_workers)
-        filtered_videos = get_file_list(args.filter_file) if args.filter_file is not None else None
-        if filtered_videos is None:
-            videos = [video for video in os.listdir(args.input_dir) if video.endswith(args.file_ext)]
-        
-        # map data to workers
-        for video_name in videos:
-            video_name = str(video_name)
-            video_name = video_name.strip()
-            if not video_name.endswith(args.file_ext):
-                video_name += args.file_ext
-            video_path = os.path.join(args.input_dir, video_name)
-            output_path = os.path.join(args.output_dir, video_name)
-            if args.resume and os.path.exists(output_path):
-                continue
-            pool.apply_async(resize_video, args=(video_path, output_path, args.size))
-
-    else:
-        resize_videos(
-            input_dir=args.input_dir, 
-            output_dir=args.output_dir, 
-            size=args.size, 
-            file_ext=args.file_ext, 
-            filter_file=args.filter_file, 
-            resume=args.resume)
+    resize_videos(
+        input_dir=args.input_dir, 
+        output_dir=args.output_dir, 
+        size=args.size, 
+        file_ext=args.file_ext, 
+        filter_file=args.filter_file, 
+        resume=args.resume)
 
 '''
 python tools/resize_videos.py \
@@ -135,4 +164,12 @@ python tools/resize_videos.py \
     --filter_file data/swallow/anno/swallow_singlestage.json \
     --size 224 224 \
     --resume
+
+python tools/resize_videos.py \
+    --input_dir /mnt/cephfs/dataset/MMA-52/heatmap/sigma_1 \
+    --output_dir /mnt/cephfs/dataset/MMA-52/heatmap/sigma_1_56x56 \
+    --size 56 56 \
+    --resume \
+    --num_worker 32 \
+    --file_ext .npy
 '''

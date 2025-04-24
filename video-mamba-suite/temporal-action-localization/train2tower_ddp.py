@@ -162,9 +162,8 @@ def run(cfg, cfg2, args, action_label=None, rank=0, world_size=1):
     model = make_two_tower(args.tower_name, model, model2, cfg, cfg2, **cfg['two_tower'])
 
     # 将模型移动到对应设备
-    if not args.cpu:
-        torch.cuda.set_device(rank)
-        model.cuda(rank)
+    torch.cuda.set_device(rank)
+    model.cuda(rank)
     
     # 使用DDP包装模型
     if world_size > 1:
@@ -281,7 +280,7 @@ def run(cfg, cfg2, args, action_label=None, rank=0, world_size=1):
             tb_writer=tb_writer if rank == 0 else None,
             print_freq=args.print_freq,
             accum_step_num=cfg['loader']['accum_steps'],
-            devices=[rank] if not args.cpu else ['cpu'],
+            devices=[rank],
             rank=rank,
             world_size=world_size
         )
@@ -296,8 +295,7 @@ def run(cfg, cfg2, args, action_label=None, rank=0, world_size=1):
             print(f'{args.tower_name} model loaded for evaluation')
             model_eval = make_two_tower(args.tower_name, model_eval, model_eval2, cfg, cfg2, **cfg['two_tower'])
             # 移动到GPU
-            if not args.cpu: # ok for now
-                model_eval = nn.DataParallel(model_eval, device_ids=['cuda:0'])
+            model_eval = nn.DataParallel(model_eval, device_ids=['cuda:0'])
             # 加载EMA模型权重
             model_eval.load_state_dict(model_ema.module.state_dict())
 
@@ -397,9 +395,8 @@ def run_ddp(rank, world_size, cfg, cfg2, args, action_label=None):
         setup(rank, world_size)
     
     # 设置设备
-    if not args.cpu:
-        cfg['devices'] = [rank]
-        cfg2['devices'] = [rank]
+    cfg['devices'] = [rank]
+    cfg2['devices'] = [rank]
     
     # 运行训练
     run(cfg, cfg2, args, action_label, rank, world_size)
@@ -410,9 +407,8 @@ def main(args):
     cfg = get_cfg(args.config)
     cfg2 = get_cfg(args.config2)
     
-    if args.cpu: # NOTE: mamba not support cpu for now
-        cfg['devices'] = ['cpu']
-        cfg2['devices'] = ['cpu']
+    cfg['devices'] = ['cpu']
+    cfg2['devices'] = ['cpu']
     # get stage
     stage = cfg['dataset']['stage_at']
     assert stage in [1, 2], "Stage must be 1 or 2!"
@@ -430,7 +426,7 @@ def main(args):
         assert len(action_label) == 1, "Stage 1 only supports one action label!"
 
     # 获取世界大小（GPU数量）
-    world_size = len(cfg['devices']) if not args.cpu else 1
+    world_size = len(cfg['devices'])
     
     if cfg['dataset']['num_classes'] == 1:
         # looping over all actions

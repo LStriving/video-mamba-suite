@@ -22,3 +22,4 @@ tmp/
 *result*
 data/
 analysis/*.png
+analysis/*/*.png
