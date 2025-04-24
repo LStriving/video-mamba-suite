@@ -27,7 +27,7 @@ do
         --heatmap_branch none \
         --heatmap_size 56 \
         --image_size 128 \
-        --tower_nam DINOAttnEarlyFusion > outputs/2tower_heatmape2e_DINOcrossattn${layer}layers/eval_${vw}.log
+        --tower_name DINOAttnEarlyFusion > outputs/2tower_heatmape2e_DINOcrossattn${layer}layers/eval_${vw}.log
     done
 done
 

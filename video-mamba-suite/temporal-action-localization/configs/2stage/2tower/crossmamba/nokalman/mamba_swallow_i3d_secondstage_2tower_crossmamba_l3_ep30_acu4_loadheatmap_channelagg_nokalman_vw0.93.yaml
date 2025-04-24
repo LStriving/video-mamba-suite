@@ -1,6 +1,6 @@
 dataset_name: swallow
 train_split: ['train']
-val_split: ['test']
+val_split: ['validation']
 dataset: {
   json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
   feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
@@ -35,13 +35,14 @@ model: {
 }
 opt: {
   learning_rate: 0.0001,
-  epochs: 20,
+  epochs: 30,
   weight_decay: 0.05,
   warmup: True,
   warmup_epochs: 5,
 }
 loader: {
   batch_size: 16,
+  accum_steps: 4,
 }
 train_cfg: {
   init_loss_norm: 100,
@@ -65,4 +66,11 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-output_folder: ./ckpts/ckpt_swallow_2tower/
+two_tower: {
+  vw: 0.93,
+  num_layers: 3,
+  act_checkpoint: False,
+  init_value: 0.1,
+  channel_agg: True,
+}
+output_folder: ./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap_channelagg_nokalman/

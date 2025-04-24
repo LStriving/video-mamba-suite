@@ -7,7 +7,7 @@ model_name: E2Eformer
 dataset: {
   json_file: data/mma52/annotations/label.json,
   # feat_folder: ./data/swallow/stage_2/resnet50_keypointfeat_56,
-  feat_folder: data/mma52/heatmap/sigma_1,
+  feat_folder: data/mma52/heatmap/sigma_1_56x56,
   file_prefix: ~,
   file_ext: .npy,
   num_classes: 52,

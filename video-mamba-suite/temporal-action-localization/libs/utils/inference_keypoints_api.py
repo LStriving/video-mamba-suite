@@ -1743,7 +1743,7 @@ if __name__ == "__main__":
     # video_path = "/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/result/datas/10_104_2020101202_li3ning2_cha2ti3_2020_10_13_105820_32.avi"
     # video_path = "test_video.mp4"
     model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt"
-    processor = VideoKeypointProcessor(model_path)
+    processor = VideoKeypointProcessor(model_path, sigma=4)
     # cropped_keypoint, cropped_edge, cropped_fusion = processor.infer_heatmaps(video_path)
     # # cropped_fusion: [N, H, W]
     

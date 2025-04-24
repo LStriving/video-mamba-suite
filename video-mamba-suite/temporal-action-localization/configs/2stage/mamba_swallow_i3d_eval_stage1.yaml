@@ -19,6 +19,7 @@ dataset: {
   max_seq_len: 864,
   two_stage: True,
   stage_at: 1,
+  tiou_threshold: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
   desired_actions: [AllTime],
 }
 model: {

@@ -11,8 +11,8 @@ python train2tower_ddp.py \
     $config2 \
     --output no_heatmap_pretrained \
     --tower_name CrossMambaEarlyFusion \
-    --resume resume \
-    --enable_branch_eval
+    --resume resume 
+    # --enable_branch_eval
     # --backbone_2 ckpts/link2/e2e_heatmap_stage2_video_mamba_l3_ep45_sigma1_hid576 \
 
 base_name=$(basename $output_folder)

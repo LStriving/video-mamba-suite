@@ -19,6 +19,7 @@ dataset: {
   max_seq_len: 192,
   two_stage: True,
   stage_at: 2,
+  # tiou_threshold: [0.1, 0.2, 0.3],
   desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
 }
 model: {
