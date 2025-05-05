@@ -1,9 +1,9 @@
 # Data Preparation
 
 ```bash
-
+VIDEO_DIR=/mnt/cephfs/home/yangweihao/tp/swallow_videos/videos_jing_8/
 cd /mnt/cephfs/home/liyirui/project/video-mamba-suite/video-mamba-suite/temporal-action-localization
-python tools/generate_data.py --video_dir /mnt/cephfs/home/yangweihao/tp/swallow_videos/videos_jing_8/ --json_path /mnt/cephfs/home/yangweihao/tp/swallow_videos/videos_jing_8/valid_entries.json --output_dir data/swallow/external_videos2_processed/
+python tools/generate_data.py --video_dir ${VIDEO_DIR} --json_path /mnt/cephfs/home/yangweihao/tp/swallow_videos/videos_jing_8/valid_entries.json --output_dir data/swallow/external_videos2_processed/
 ```
 
 ```bash
@@ -15,6 +15,8 @@ python tools/convert_generate_json.py --input data/swallow/external_videos2_proc
 cd /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg
 python tools/extract_flow_frame.py --video_path /mnt/cephfs/home/liyirui/project/video-mamba-suite/video-mamba-suite/temporal-action-localization/data/swallow/external_videos2_processed/videos --save_path /mnt/cephfs/home/liyirui/project/video-mamba-suite/video-mamba-suite/temporal-action-localization/data/swallow/external_videos2_processed/flowframes
 ```
+
+
 
 ```bash
 cd /mnt/cephfs/home/liyirui/project/swallow_a2net_vswg

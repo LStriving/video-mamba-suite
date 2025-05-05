@@ -268,6 +268,7 @@ def get_args():
     parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')
     parser.add_argument("--only_perfect", action='store_true', help="only infer on perfect stage 1")
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
+    parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
     args = parser.parse_args()
     return args
 

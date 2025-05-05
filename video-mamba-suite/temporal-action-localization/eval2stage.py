@@ -195,7 +195,7 @@ def main(args):
                 initI3ds(args)
             perfect_feat_center = extract_features_from_res(args.video_root, args.perfect_stage1, args.flow_dir, perfect_result, cfg)
             perfect_json_path = build_tmp_json(cfg, perfect_feat_center)
-            cfg['cache_dir'] = args.cache_dir #？
+            cfg['cache_dir'] = args.cache_dir
 
             # save cache
             cache = {}
@@ -274,6 +274,9 @@ def stage1infer_extractFeature(args):
         # {video-id:[], t-start:[], t-end:[], score:[], label:[]}
         result['t-center'] = (result['t-start'] + result['t-end']) / 2
 
+        if args.test_first_stage:
+            det_eval_stage1.evaluate(result)
+
         print("Before filtering, we have ", len(result['video-id']), "segments.")
 
         # filter out low confidence results
@@ -344,7 +347,7 @@ def crop_features_from_res(cfg, new_feat_path, result):
         seg_id = f'{res}#{video_rank}'
         crop_feat_path = os.path.join(new_feat_path, f"{seg_id}.npy")
         data = np.load(feat_path)
-        duration = int(res.split("_")[-1])
+        duration = int(res.split("_")[-1].split("s")[0])
         clip_start = result['t-center'][idx] - CLIP_DUR / 2
         clip_end = result['t-center'][idx] + CLIP_DUR / 2
         clip_start = max(clip_start, 0)
@@ -510,7 +513,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
         t_extend = CLIP_DUR # 4 seconds
         clip_start = t_center - t_extend / 2
         clip_end = t_center + t_extend / 2
-        duration = int(video_id.split("_")[-1])
+        duration = int(video_id.split("_")[-1].split("s")[0])
         clip_start = max(clip_start, 0)
         clip_end = min(clip_end, duration)
         start_ratio = clip_start / duration
@@ -521,7 +524,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                 cache_video_id = video_id
                 per_video_rank = 0
                 video_path = os.path.join(video_root, f"{video_id}.avi")
-                assert os.path.isfile(video_path), "Video file does not exist!"
+                assert os.path.isfile(video_path), f"Video file {video_path} does not exist!"
                 try:
                     rgb_data = skvideo.io.vread(video_path)
                 except Exception as e:
@@ -531,7 +534,6 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                     else:
                         print(e)
                     continue
-                # extract keypoint
                 if not cfg['heatmap']:
                     # resize video
                     rgb_data=torch.from_numpy(rgb_data) 
@@ -540,6 +542,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                     rgb_data=rgb_data.view(-1,IMAGE_SIZE,IMAGE_SIZE,3) / 127.5 - 1
                     rgb_data=rgb_data.float()
                     preprocess = None
+                # extract keypoint
                 else:
                     preprocess = partial(extract_keypoints, processor=processor, 
                     HEATMAP_SIZE=HEATMAP_SIZE, branch=cfg['heatmap_branch'], heatmap_type=cfg['heatmap_type'])
@@ -848,6 +851,7 @@ if __name__ == '__main__':
     parser.add_argument("--infer_perfect_stage1", action='store_true', help="infer on best stage 1")
     parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')
     parser.add_argument("--seg_duration", type=float, default=4.004, help='segment duration for stage 2')
+    parser.add_argument('--downsample_rate',type=float, default=1, help='downsample video, the final dur = seg_dur * ds_r')
     parser.add_argument("--result_path", type=str, default=None, help='output result path')
     parser.add_argument("--last_epoch", action='store_true', help='use last epoch to evaluate(default: best epoch)')
     parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
