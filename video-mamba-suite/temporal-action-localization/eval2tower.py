@@ -100,7 +100,8 @@ def run2tower(cfg, cfg2, args, action_label=None):
         -1,
         ext_score_file=cfg['test_cfg']['ext_score_file'],
         tb_writer=None,
-        print_freq=999999 #args.print_freq
+        print_freq=20, #args.print_freq
+        pflops=args.calflops
     )
     # remap action labels
     result = remap_action_labels(result, train_label_dict, eval_label_dict)
@@ -269,6 +270,7 @@ def get_args():
     parser.add_argument("--only_perfect", action='store_true', help="only infer on perfect stage 1")
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
+    parser.add_argument('--calflops', action='store_true', help='calculate flops')
     args = parser.parse_args()
     return args
 

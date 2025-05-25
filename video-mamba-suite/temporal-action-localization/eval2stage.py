@@ -112,6 +112,7 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
                           ext_score_file=cfg['test_cfg']['ext_score_file'],
                           evaluator=det_eval,
                           output_file=output_file,
+                          pflops=args.calflops,
                         #   visualize=args.visualize,
                         #   print_freq=args.print_freq,
                           )
@@ -434,7 +435,7 @@ def single_cls_map(args, cfg, label_dict, action):
         raise FileNotFoundError
     action_ckpt_dir = os.path.join(args.ckpt2, action_ckpt_dirs[0])
     if args.last_epoch:
-        args.ckpt = get_best_pth_from_dir(action_ckpt_dir, 'epoch')
+        args.ckpt = get_best_pth_from_dir(action_ckpt_dir, 'epoch', args.epoch)
     else:
         args.ckpt = get_best_pth_from_dir(action_ckpt_dir)
     print(f"Using ckpt: {args.ckpt}")
@@ -771,7 +772,7 @@ def resize_data(data, image_size):
         data_tmp[index,:,:,:] = datum_tmp
     return data_tmp
 
-def get_best_pth_from_dir(dir,key='performance') -> str:
+def get_best_pth_from_dir(dir,key='performance',epoch=-1) -> str:
     assert os.path.isdir(dir), "Directory does not exist!"
     ckpts = os.listdir(dir)
     ckpts = [ckpt for ckpt in ckpts if ".pth.tar" in ckpt]
@@ -779,6 +780,9 @@ def get_best_pth_from_dir(dir,key='performance') -> str:
         ckpts = sorted(ckpts, key=lambda x: float(x.split(".pth.tar")[0].split("_")[-1]), reverse=True)
     elif key == 'epoch':
         ckpts = sorted(ckpts, key=lambda x: int(x.split(".pth.tar")[0].split("_")[-2]), reverse=True)
+        if epoch!=-1:
+            # epoch += 1
+            ckpts = [ckpts[::-1][epoch]]
     return os.path.join(dir, ckpts[0])
 
 ################################################################################
@@ -851,12 +855,12 @@ if __name__ == '__main__':
     parser.add_argument("--infer_perfect_stage1", action='store_true', help="infer on best stage 1")
     parser.add_argument("--perfect_stage1", type=str, metavar='DIR', default='', help='path to extracted features')
     parser.add_argument("--seg_duration", type=float, default=4.004, help='segment duration for stage 2')
-    parser.add_argument('--downsample_rate',type=float, default=1, help='downsample video, the final dur = seg_dur * ds_r')
     parser.add_argument("--result_path", type=str, default=None, help='output result path')
     parser.add_argument("--last_epoch", action='store_true', help='use last epoch to evaluate(default: best epoch)')
     parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
+    parser.add_argument('--calflops', action='store_true', help='calculate flops')
     args = parser.parse_args()
     main(args)
     # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt

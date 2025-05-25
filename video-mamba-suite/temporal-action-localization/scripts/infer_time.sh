@@ -1,0 +1,2 @@
+nohup bash scripts/eval_lgte_oracle.sh > outputs/lgte_oracle_infertime.log
+nohup bash scripts/2tower_heatmape2e/crossmamba/channel_agg_load_heatmap_oracle_swallow2.sh > outputs/sg-mamba_oracle_infertime.log

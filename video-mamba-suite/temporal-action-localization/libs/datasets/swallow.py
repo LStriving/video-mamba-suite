@@ -85,6 +85,8 @@ class SwallowDataset(Dataset):
 
         # load database and select the subset
         dict_db, label_dict = self._load_json_db(self.json_file)
+        assert label_dict is not None
+        assert desired_actions is not None
         assert len(label_dict) == num_classes or \
                 len(label_dict) == len(desired_actions), f'{len(label_dict)} vs {num_classes}, label dict: {label_dict}'
         self.data_list = dict_db

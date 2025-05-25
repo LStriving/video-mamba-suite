@@ -8,11 +8,12 @@ base_name=$(basename $output_folder)
 # mkdir -p outputs/$base_name
 # if output file not exists, run
 # if [ ! -f outputs/$base_name/mamba_swallow_i3d_secondstage_lgte.log ]; then
-python eval2stage.py --config $config --config2 $config2 --re-extract \
+nohup python eval2stage.py --config $config --config2 $config2 --re-extract \
         --ckpt2 /mnt/cephfs/ec/home/liyirui/swallow_project/video-mamba-suite/ckpts/ckpt_swallow_stage2_lgte \
         --only_perfect --train_set --infer_perfect_stage1 --perfect_stage1 ./tmp/swallow2_0427_i3d_rgb128_flow128_perfect/ \
         --seg_duration 5 \
-        --cache_dir tmp/threshold0.23_swallow2 --image_size 128
+        --cache_dir tmp/threshold0.23_swallow2 --image_size 128 > outputs/lgte_externaltest.log
+echo outputs/lgte_externaltest.log
 # fi
 
 # for action in ${actions[@]}

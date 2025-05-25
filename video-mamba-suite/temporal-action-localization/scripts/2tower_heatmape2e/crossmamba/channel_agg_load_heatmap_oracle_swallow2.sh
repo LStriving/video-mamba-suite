@@ -1,4 +1,4 @@
-#!/bin/bash
+ --calflops#!/bin/bash
 config=configs/2stage/2tower/crossmamba/vw_channelagg/mamba_swallow_i3d_secondstage_2tower_crossmamba_l3_ep30_acu4_loadheatmap_vw0.6.yaml
 output_folder=$(grep 'output_folder:' "$config" | awk -F ':' '{print $2}' | xargs)
 vw=$(grep 'vw:' "$config" | awk -F ':' '{print $2}' | xargs)
@@ -41,7 +41,7 @@ python eval2tower.py \
     --infer_perfect_stage1 --perfect_stage1 ./tmp/swallow2_0427_i3d_rgb128_flow128_perfect/ \
     --train_set \
     --only_perfect \
-    --tower_name CrossMambaEarlyFusion 
+    --tower_name CrossMambaEarlyFusion  --calflops
     # > outputs/${base_name}/oracle_eval_${vw}.log
 
-# echo all commands to output file
+# echo all commands to output file  

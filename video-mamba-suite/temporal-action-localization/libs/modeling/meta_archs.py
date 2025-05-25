@@ -446,7 +446,7 @@ class PtTransformer(nn.Module):
                     'lgte_tem_scale': self.lgte_tem_scale
                 }
             )
-        else:
+        elif backbone_type == 'conv':
             self.backbone = make_backbone(
                 'conv',
                 **{
@@ -458,6 +458,8 @@ class PtTransformer(nn.Module):
                     'with_ln' : embd_with_ln
                 }
             )
+        else:
+            raise ValueError(f'Backbone type {backbone_type} is not valid.')
 
         # fpn network: convs
         assert fpn_type in ['fpn', 'identity']
@@ -998,6 +1000,9 @@ class E2Eformer(PtTransformer):
                  video_stem_chunk_size,
                  *args, 
                  **kwargs):
+        '''
+        E2E two tower model, t may vary across videos but pad them in the model
+        '''
         super().__init__(backbone_type, fpn_type, backbone_arch, scale_factor, input_dim, 
                          max_seq_len, max_buffer_len_factor, n_head, n_mha_win_size, 
                          embd_kernel_size, embd_dim, embd_with_ln, fpn_dim, fpn_with_ln, 
@@ -1076,7 +1081,7 @@ class E2Eformer(PtTransformer):
     def pre_forward(self, video_list):
         # video_list: list of dict items (B)
         ##  'feat': np.ndarray (C x T x H x W)
-        # input shape: B, C x T(vary) x H x W  (should be resize already)
+        # input shape: B, C x T(vary) x H x W  (should be resized already)
         # 2D network: [B, C x T(vary) x H x W] -> [B, T(vary) x C' x H' x W'] or [B, T(vary) x C']
         ## record T for each video
         for video in video_list:

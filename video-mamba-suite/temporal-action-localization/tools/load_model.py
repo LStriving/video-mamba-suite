@@ -1,7 +1,7 @@
 import os
 import torch
 
-def load_backbone(model, path, device) -> torch.Module:
+def load_backbone(model, path, device):
     if os.path.isfile(path):
         print("=> loaded checkpoint '{:s}' for tower 1".format(path))
         # alter key value mapping:

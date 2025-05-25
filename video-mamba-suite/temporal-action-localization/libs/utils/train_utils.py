@@ -20,6 +20,9 @@ from tqdm import tqdm
 import json
 import torch.distributed as dist
 
+# pip install calflops
+from calflops import calculate_flops
+
 ################################################################################
 def fix_random_seed(seed, include_cuda=True):
     rng_generator = torch.manual_seed(seed)
@@ -430,6 +433,7 @@ def infer_one_epoch(
     output_file = None,
     print_freq = 20,
     vws = None,
+    pflops = False,
     **kwargs
 ):
     '''Infer the model on the validation set'''
@@ -446,10 +450,20 @@ def infer_one_epoch(
     
 
     # loop over validation set
-    start = time.time()
+    batch_time = AverageMeter()
+    
     for iter_idx, video_list in enumerate(val_loader, 0):
         # forward the model (wo. grad)
         with torch.no_grad():
+            if pflops and iter_idx == 0:
+                flops, macs, params = calculate_flops(
+                    model=model,
+                    args=video_list,
+                    output_as_string=True,
+                    output_precision=4
+                )
+                print("FLOPs:%s   MACs:%s   Params:%s \n" %(flops, macs, params))
+                
             output = model(video_list)
             if vws is not None:
                 print(f"Testing Visual branch weight: {vws}")
@@ -467,17 +481,21 @@ def infer_one_epoch(
                     results['label'].append(output[vid_idx]['labels'])
                     results['score'].append(output[vid_idx]['scores'])
 
+        # warmup
+        if iter_idx == 0:
+            torch.cuda.synchronize()
+            start = time.time()
         # printing
-        # if (iter_idx != 0) and iter_idx % (print_freq) == 0:
-        #     # measure elapsed time (sync all kernels)
-        #     torch.cuda.synchronize()
-        #     batch_time.update((time.time() - start) / print_freq)
-        #     start = time.time()
+        if (iter_idx != 0) and iter_idx % (print_freq) == 0:
+            # measure elapsed time (sync all kernels)
+            torch.cuda.synchronize()
+            batch_time.update((time.time() - start) * 1000 / print_freq)
+            start = time.time()
 
-        #     # print timing
-        #     print('Test: [{0:05d}/{1:05d}]\t'
-        #           'Time {batch_time.val:.2f} ({batch_time.avg:.2f})'.format(
-        #           iter_idx, len(val_loader), batch_time=batch_time))
+            # print timing
+            print('Test: [{0:05d}/{1:05d}]\t'
+                  'Time {batch_time.val:.2f} ({batch_time.avg:.2f})'.format(
+                  iter_idx, len(val_loader), batch_time=batch_time))
 
     # gather all stats and evaluate
     results['t-start'] = torch.cat(results['t-start']).numpy()
