@@ -270,6 +270,7 @@ def get_args():
     parser.add_argument("--only_perfect", action='store_true', help="only infer on perfect stage 1")
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
+    parser.add_argument('--normal_kalman', type=bool, default=False)
     parser.add_argument('--calflops', action='store_true', help='calculate flops')
     args = parser.parse_args()
     return args

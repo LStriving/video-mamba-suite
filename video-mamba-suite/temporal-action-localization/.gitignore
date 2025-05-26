@@ -23,3 +23,4 @@ tmp/
 data/
 analysis/*.png
 analysis/*/*.png
+cache

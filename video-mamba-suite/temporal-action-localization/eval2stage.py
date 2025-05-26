@@ -157,9 +157,20 @@ def get_label_dict(json_path, desired_actions):
                 continue
     return label_dict
 
+def merge_keypoint_config(args):
+    if os.path.isfile(args.config):
+        cfg = load_config(args.config)
+    else:
+        raise ValueError("Config file does not exist.")
+    if os.path.isfile(args.config2):
+        cfg2 = load_config(args.config2)
+        cfg['keypoint'] = cfg2['keypoint']
+    return cfg
+        
+    
 ################################################################################
 def main(args):
-    ### Stage 1
+    ### Stage 1   
     cfg, eval_dataset, eval_db_vars, new_feat_path, new_feat_center, new_json_path = stage1infer_extractFeature(args)
 
     ### Stage 2
@@ -177,6 +188,7 @@ def main(args):
         cfg['heatmap_branch'] = args.heatmap_branch
         cfg['heatmap'] = args.heatmap
         cfg['kalman'] = args.kalman
+        cfg['normal_kalman'] = args.normal_kalman
         cfg['keypoint']['sigma'] = args.heatmap_sigma if args.heatmap else cfg['keypoint']['sigma']
         if os.path.isfile(save_cache_path):
             print(f"Loading cache from {save_cache_path}")
@@ -213,10 +225,7 @@ def main(args):
 def stage1infer_extractFeature(args):
     """0. load config"""
     # sanity check
-    if os.path.isfile(args.config):
-        cfg = load_config(args.config)
-    else:
-        raise ValueError("Config file does not exist.")
+    cfg = merge_keypoint_config(args)
     cfg['cache_dir'] = args.cache_dir
     cfg['cropped_videos'] = args.cropped_videos
     cfg['heatmap_dir'] = args.heatmap_dir
@@ -228,6 +237,7 @@ def stage1infer_extractFeature(args):
     cfg['seg_duration'] = args.seg_duration
     cfg['heatmap_type'] = args.heatmap_type
     cfg['kalman'] = args.kalman
+    cfg['normal_kalman'] = args.normal_kalman
     pprint(cfg)
     args.saveonly = True
     if args.train_set:
@@ -498,14 +508,17 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
     WINDOW_SIZE = cfg['dataset']['num_frames']
     WINDOW_STEP = cfg['dataset']['feat_stride']
     kalman = True if cfg['kalman'].lower() == 'true' else False
+    normal_kalman = cfg['normal_kalman']
     # get center and extend 
     cache_video_id = None
     rgb_data = None
     flow_data = None
     new_feats = {}
     per_video_rank = 0
+    processor = None
     if cfg['heatmap']:
         from libs.utils import VideoKeypointProcessor2
+        print(f"Loading Ckpt from {cfg['keypoint']['model_path']}")
         processor = VideoKeypointProcessor2(cfg['keypoint']['model_path'], sigma=cfg['keypoint']['sigma'])
 
     for idx in tqdm(range(len(result['video-id']))):
@@ -574,8 +587,10 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                     crop_video(video_path, output_path, clip_start, clip_end)
 
                 # extract heatmap
-                processor = VideoKeypointProcessor(cfg['keypoint']['model_path'], sigma=cfg['keypoint']['sigma'])
-                _, _, cropped_fusion = processor.infer_heatmaps(output_path, kalman=kalman)
+                if processor is None:
+                    print(f"Loading Ckpt from {cfg['keypoint']['model_path']}")
+                    processor = VideoKeypointProcessor(cfg['keypoint']['model_path'], sigma=cfg['keypoint']['sigma'])
+                _, _, cropped_fusion = processor.infer_heatmaps(output_path, kalman=kalman, normal_kalman=normal_kalman)
                 # save heatmap
                 os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
                 np.save(heatmap_path, cropped_fusion)
@@ -860,6 +875,7 @@ if __name__ == '__main__':
     parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
+    parser.add_argument('--normal_kalman', type=bool, default=False)
     parser.add_argument('--calflops', action='store_true', help='calculate flops')
     args = parser.parse_args()
     main(args)
