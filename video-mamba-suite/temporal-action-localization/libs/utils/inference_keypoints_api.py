@@ -287,7 +287,7 @@ class VideoKeypointProcessor:
 
         return resized_frames, original_frames
 
-    def infer_keypoints(self, video_path, kalman=False):
+    def infer_keypoints(self, video_path, kalman=True, normal_kalman=False):
         """
         Perform inference on the video and store keypoints and confidences.
         """
@@ -319,7 +319,7 @@ class VideoKeypointProcessor:
         self.confidences = confidences
 
         h, w, _ = self.original_frames[0].shape
-        if kalman and len(self.keypoints)>1:
+        if kalman and len(self.keypoints)>1 and not normal_kalman:
             smoothed_keypoints = kalman_filter_with_confidence(self.keypoints, self.confidences)
             reversed_confidences = self.confidences[::-1,:]
             re_smoothed_keypoints = kalman_filter_with_confidence(smoothed_keypoints[::-1,:,:], reversed_confidences)
@@ -328,13 +328,17 @@ class VideoKeypointProcessor:
             final_keypoints = mixed_keypoints_weighted(self.keypoints, self.confidences, smoothed_keypoints)
             final_keypoints = kalman_filter_without_confidence(final_keypoints)
             return final_keypoints, confidences, h, w
-        elif kalman:
+        elif kalman and len(self.keypoints)>1 and normal_kalman:
+            # forward kalman without confidence and only forward
+            smoothed_keypoints = kalman_filter_without_confidence(self.keypoints)
+            return smoothed_keypoints, confidences, h, w
+        elif not kalman:
             return self.keypoints, confidences, h, w
 
         return self.keypoints, self.confidences, h, w
     
-    def infer_heatmaps(self, video_path, kalman=True):
-        keypoints, confidences, h, w = self.infer_keypoints(video_path, kalman=kalman)
+    def infer_heatmaps(self, video_path, kalman=True, normal_kalman=False):
+        keypoints, confidences, h, w = self.infer_keypoints(video_path, kalman=kalman, normal_kalman=normal_kalman)
         keypoints[:, :, 0] *= w
         keypoints[:, :, 1] *= h  
         cnt = keypoints.shape[0]
@@ -1743,6 +1747,8 @@ if __name__ == "__main__":
     # video_path = "/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/result/datas/10_104_2020101202_li3ning2_cha2ti3_2020_10_13_105820_32.avi"
     # video_path = "test_video.mp4"
     model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt"
+    # model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/resnet_trace.pt"
+    # model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/vitpose_trace.pt"
     processor = VideoKeypointProcessor(model_path, sigma=4)
     # cropped_keypoint, cropped_edge, cropped_fusion = processor.infer_heatmaps(video_path)
     # # cropped_fusion: [N, H, W]
@@ -1845,14 +1851,14 @@ if __name__ == "__main__":
     #     kalman=False,
     #     selected_index=-1,
     # )
-    def process_single_video(obj, video_path, output_root, kalman, selected_index, output_size=None):
+    def process_single_video(obj, video_path, output_root, kalman, normal_kalman, selected_index, output_size=None):
         base_name = os.path.basename(video_path).split(".avi")[0]
         save_np = f'{base_name}.npy'
         os.makedirs(output_root, exist_ok=True)
         save_path = os.path.join(output_root, save_np)
         
         # Extract heatmap data
-        data = obj.infer_heatmaps(video_path, kalman)[selected_index]
+        data = obj.infer_heatmaps(video_path, kalman, normal_kalman)[selected_index]
         
         # Resize if needed
         if output_size is not None:
@@ -1866,7 +1872,7 @@ if __name__ == "__main__":
         return save_path
     
     # Process all videos in sequence
-    def process_all_videos(obj, input_root, input_file, output_root, kalman, 
+    def process_all_videos(obj, input_root, input_file, output_root, kalman, normal_kalman,
                           selected_index, resume=True, output_size=None):
         # Read video list from file
         with open(input_file, 'r') as f:
@@ -1888,19 +1894,32 @@ if __name__ == "__main__":
                     pass
             
             # Process the video
-            result = process_single_video(obj, video, output_root, kalman, selected_index, output_size)
+            result = process_single_video(obj, video, output_root, kalman, normal_kalman, selected_index, output_size)
             results.append(result)
         
         return results
     
-    # Process videos
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_path', type=str, default='/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt')
+    parser.add_argument('--input_root', type=str, default='/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas/')
+    parser.add_argument('--input_file', type=str, default='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt')
+    parser.add_argument('--output_root', type=str, default='/mnt/cephfs/dataset/swallow_heatmap56_sigma4_normalkalman')
+    parser.add_argument('--kalman', type=bool, default=True)
+    parser.add_argument('--normal_kalman', type=bool, default=True)
+    parser.add_argument('--selected_index', type=int, default=-1)
+    parser.add_argument('--output_size', type=tuple, default=(56,56))
+    parser.add_argument('--sigma', type=float, default=4)
+    args = parser.parse_args()
+    
+    processor = VideoKeypointProcessor(args.model_path, sigma=args.sigma)
     results = process_all_videos(
         obj=processor,
-        input_root='/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas/',
-        input_file='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt',
-        output_root='/mnt/cephfs/dataset/swallow_heatmap56_sigma4_nokalman',
-        kalman=False,
-        selected_index=-1,
-        output_size=(56,56),
+        input_root=args.input_root,
+        input_file=args.input_file,
+        output_root=args.output_root,
+        kalman=args.kalman,
+        normal_kalman=args.normal_kalman,
+        selected_index=args.selected_index,
+        output_size=args.output_size,
     )
-    

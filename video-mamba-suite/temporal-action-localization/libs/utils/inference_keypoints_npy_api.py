@@ -284,7 +284,7 @@ class VideoKeypointProcessor:
 
         return resized_frames, original_frames
 
-    def infer_keypoints(self, video_array, kalman=False):
+    def infer_keypoints(self, video_array, kalman=False, normal_kalman=False):
         """
         Perform inference on the video and store keypoints and confidences.
         """
@@ -316,7 +316,7 @@ class VideoKeypointProcessor:
         self.confidences = confidences
 
         h, w, _ = self.original_frames[0].shape
-        if kalman and len(self.keypoints)>1:
+        if kalman and len(self.keypoints)>1 and not normal_kalman:
             smoothed_keypoints = kalman_filter_with_confidence(self.keypoints, self.confidences)
             reversed_confidences = self.confidences[::-1,:]
             re_smoothed_keypoints = kalman_filter_with_confidence(smoothed_keypoints[::-1,:,:], reversed_confidences)
@@ -325,13 +325,17 @@ class VideoKeypointProcessor:
             final_keypoints = mixed_keypoints_weighted(self.keypoints, self.confidences, smoothed_keypoints)
             final_keypoints = kalman_filter_without_confidence(final_keypoints)
             return final_keypoints, confidences, h, w
+        elif kalman and len(self.keypoints)>1 and normal_kalman:
+            # forward kalman without confidence and only forward
+            smoothed_keypoints = kalman_filter_without_confidence(self.keypoints)
+            return smoothed_keypoints, confidences, h, w
         elif kalman:
             return self.keypoints, confidences, h, w
 
-        return self.keypoints, self.confidences
+        return self.keypoints, self.confidences, h, w
     
-    def infer_heatmaps(self, video_array, kalman=True):
-        keypoints, confidences, h, w = self.infer_keypoints(video_array, kalman=kalman)
+    def infer_heatmaps(self, video_array, kalman=True, normal_kalman=False):
+        keypoints, confidences, h, w = self.infer_keypoints(video_array, kalman=kalman, normal_kalman=normal_kalman)
         keypoints[:, :, 0] *= w
         keypoints[:, :, 1] *= h  
         cnt = keypoints.shape[0]
@@ -426,6 +430,8 @@ if __name__ == "__main__":
     
     # video_path = "test_video.mp4"
     model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/best_model_trace.pt"
+    # model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/resnet_trace.pt"
+    # model_path = "/mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/vitpose_trace.pt"
     processor = VideoKeypointProcessor(model_path)
     # video_array = skvideo.io.vread(video_path)
     # print(video_array.shape) # (86, 612, 612, 3)
@@ -460,14 +466,14 @@ if __name__ == "__main__":
 
     # Use multiprocess to extract heatmap without kalman
     # Single processor version for processing videos
-    def process_single_video(obj, video_path, output_root, kalman, selected_index, output_size=None):
+    def process_single_video(obj, video_path, output_root, kalman, normal_kalman, selected_index, output_size=None):
         base_name = os.path.basename(video_path).split(".avi")[0]
         save_np = f'{base_name}.npy'
         os.makedirs(output_root, exist_ok=True)
         save_path = os.path.join(output_root, save_np)
         
         # Extract heatmap data
-        data = obj.infer_heatmaps(video_path, kalman)[selected_index]
+        data = obj.infer_heatmaps(video_path, kalman, normal_kalman)[selected_index]
         
         # Resize if needed
         if output_size is not None:
@@ -481,7 +487,7 @@ if __name__ == "__main__":
         return save_path
     
     # Process all videos in sequence
-    def process_all_videos(obj, input_root, input_file, output_root, kalman, 
+    def process_all_videos(obj, input_root, input_file, output_root, kalman, normal_kalman,
                           selected_index, resume=True, output_size=None):
         # Read video list from file
         with open(input_file, 'r') as f:
@@ -503,7 +509,7 @@ if __name__ == "__main__":
                     pass
             
             # Process the video
-            result = process_single_video(obj, video, output_root, kalman, selected_index, output_size)
+            result = process_single_video(obj, video, output_root, kalman, normal_kalman, selected_index, output_size)
             results.append(result)
         
         return results
@@ -513,8 +519,9 @@ if __name__ == "__main__":
         obj=processor,
         input_root='/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas/',
         input_file='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt',
-        output_root='/mnt/cephfs/dataset/swallow_heatmap56_sigma4_nokalman',
-        kalman=False,
+        output_root='/mnt/cephfs/dataset/swallow_heatmap56_sigma4_normalkalman',
+        kalman=True,
+        normal_kalman=True,
         selected_index=-1,
         output_size=(56,56),
     )
