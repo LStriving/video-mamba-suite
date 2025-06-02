@@ -39,8 +39,11 @@ def run2tower(cfg, cfg2, args, action_label=None):
     else:
         assert os.path.isdir(args.ckpt), "CKPT file folder does not exist!"
         if args.epoch > 0:
-            ckpt_file = os.path.join(args.ckpt,
-                                     'epoch_{:03d}.pth.tar'.format(args.epoch))
+            ckpts = os.listdir(args.ckpt)
+            ckpt_name = [i for i in ckpts if 'epoch_{:03d}'.format(args.epoch) in i]
+            assert len(ckpt_name) != 0, f"Epoch {args.epoch} for ckpt not found"
+            ckpt_name = ckpt_name[0]
+            ckpt_file = os.path.join(args.ckpt, ckpt_name)
         else:
             ckpt_file_list = sorted(
                 glob.glob(os.path.join(args.ckpt, '*.pth.tar')))
@@ -66,6 +69,9 @@ def run2tower(cfg, cfg2, args, action_label=None):
     multi_valdataset = MultiModalDataset(val_dataset, val_dataset2) 
     cfg['loader']['batch_size'] = 1
     val_loader = make_data_loader(multi_valdataset, False , rng_generator, **cfg['loader'])
+    if args.vw is not None:
+        cfg['two_tower']['vw'] = args.vw
+        print(f"Replace confusion weight factor vw to {args.vw}")
     
     # load model
     model = make_meta_arch(cfg['model_name'], **cfg['model'])
@@ -116,6 +122,7 @@ def main(args):
         twotower_stage2eval(args, eval_dataset, eval_db_vars, new_feat_path, new_feat_center, new_json_path)
 
     if args.config2 and args.infer_perfect_stage1:
+        print(f"Infer perfect stage 1 ...")
         # if cache exists, load it
         save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + "_perfect.pkl"
         save_cache_path = os.path.join(args.perfect_stage1, save_cache_name)
@@ -227,6 +234,10 @@ def get_args():
                         metavar='DIR',
                         default='ckpts/ckpt_swallow/mamba_swallow_i3d_stage1_mamba_swallow_stage1_2_0.0001/epoch_024_0.82621.pth.tar',
                         help='path to a checkpoint')
+    parser.add_argument('--epoch',
+                        type=int,
+                        default=-1,
+                        help='checkpoint epoch')
     parser.add_argument('-t',
                         '--topk',
                         default=-1,
@@ -270,8 +281,10 @@ def get_args():
     parser.add_argument("--only_perfect", action='store_true', help="only infer on perfect stage 1")
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
-    parser.add_argument('--normal_kalman', type=bool, default=False)
+    parser.add_argument('--normal_kalman', action='store_true', default=False)
+    parser.add_argument('--selected_index', type=int, default=-1, help='selected index for heatmap feature')
     parser.add_argument('--calflops', action='store_true', help='calculate flops')
+    parser.add_argument('--vw', type=float, default=None)
     args = parser.parse_args()
     return args
 

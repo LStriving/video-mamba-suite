@@ -190,6 +190,7 @@ def main(args):
         cfg['kalman'] = args.kalman
         cfg['normal_kalman'] = args.normal_kalman
         cfg['keypoint']['sigma'] = args.heatmap_sigma if args.heatmap else cfg['keypoint']['sigma']
+        cfg['selected_index'] = args.selected_index
         if os.path.isfile(save_cache_path):
             print(f"Loading cache from {save_cache_path}")
             with open(save_cache_path, 'rb') as f:
@@ -238,6 +239,7 @@ def stage1infer_extractFeature(args):
     cfg['heatmap_type'] = args.heatmap_type
     cfg['kalman'] = args.kalman
     cfg['normal_kalman'] = args.normal_kalman
+    cfg['selected_index'] = args.selected_index
     pprint(cfg)
     args.saveonly = True
     if args.train_set:
@@ -264,6 +266,7 @@ def stage1infer_extractFeature(args):
     # if cache exists, load it
     save_cache_name = os.path.basename(args.ckpt).split(".pth.tar")[0] + ".pkl"
     save_cache_path = os.path.join(args.cache_dir, save_cache_name)
+    print(f"save_cache_path: {save_cache_path}")
     if os.path.isfile(save_cache_path):
         print(f"Loading cache from {save_cache_path}")
         with open(save_cache_path, 'rb') as f:
@@ -444,7 +447,7 @@ def single_cls_map(args, cfg, label_dict, action):
         print(f"Error: No ckpt dir found for action {action}.")
         raise FileNotFoundError
     action_ckpt_dir = os.path.join(args.ckpt2, action_ckpt_dirs[0])
-    if args.last_epoch:
+    if args.last_epoch or args.epoch:
         args.ckpt = get_best_pth_from_dir(action_ckpt_dir, 'epoch', args.epoch)
     else:
         args.ckpt = get_best_pth_from_dir(action_ckpt_dir)
@@ -561,7 +564,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                     preprocess = partial(extract_keypoints, processor=processor, 
                     HEATMAP_SIZE=HEATMAP_SIZE, branch=cfg['heatmap_branch'], heatmap_type=cfg['heatmap_type'])
                 
-                if flow_dir is not None:
+                if flow_dir is not None and not cfg['heatmap']:
                     flow_data=get_flow_frames_from_targz(os.path.join(flow_dir, f"{video_id}.tar.gz"))
                     if flow_data.shape[1]!=IMAGE_SIZE or flow_data.shape[2]!=IMAGE_SIZE:
                         flow_data = resize_data(flow_data, IMAGE_SIZE)
@@ -590,7 +593,7 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
                 if processor is None:
                     print(f"Loading Ckpt from {cfg['keypoint']['model_path']}")
                     processor = VideoKeypointProcessor(cfg['keypoint']['model_path'], sigma=cfg['keypoint']['sigma'])
-                _, _, cropped_fusion = processor.infer_heatmaps(output_path, kalman=kalman, normal_kalman=normal_kalman)
+                cropped_fusion = processor.infer_heatmaps(output_path, kalman=kalman, normal_kalman=normal_kalman)[cfg['selected_index']]
                 # save heatmap
                 os.makedirs(os.path.dirname(heatmap_path), exist_ok=True)
                 np.save(heatmap_path, cropped_fusion)
@@ -610,13 +613,12 @@ def extract_features_from_res(video_root, new_feat_path, flow_dir, result, cfg):
             continue
         # extract features
         if cfg['heatmap']:
+            flow_data = None
             extract_features(rgb_data, flow_data, new_feat_file, 
                 start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP, preprocess=preprocess, cropped=cfg['cropped_videos'], branch=cfg['heatmap_branch'])
         else:
             extract_features(rgb_data, flow_data, new_feat_file, 
                 start_ratio, end_ratio, WINDOW_SIZE, WINDOW_STEP, preprocess=preprocess, cropped=cfg['cropped_videos'])
-        # if len(new_feats) == 2: # debug
-        #     build_tmp_json(cfg, new_feats)
     return new_feats
 
 def extract_keypoints(video_data, processor, HEATMAP_SIZE, branch, heatmap_type='fusion'):
@@ -739,7 +741,7 @@ def build_tmp_json(cfg, new_feat_center):
     CLIP_DUR = cfg['seg_duration']
     new_data = {}
     for seg_id, t_center in new_feat_center.items():
-        shift = t_center - 2
+        shift = t_center - CLIP_DUR / 2
         video_id = seg_id.split("#")[0]
         new_data[seg_id] = deepcopy(data[video_id])
         new_data[seg_id]['duration'] = CLIP_DUR
@@ -779,6 +781,7 @@ def initI3ds(args):
     i3d_flow.train(False)
     i3d_rgb.cuda()
     i3d_flow.cuda()
+    print(f'load i3d_rgb and i3d_flow')
 
 def resize_data(data, image_size):
     data_tmp=torch.zeros(data.shape[0:1]+(image_size,image_size,data.shape[-1])).float()
@@ -795,9 +798,8 @@ def get_best_pth_from_dir(dir,key='performance',epoch=-1) -> str:
         ckpts = sorted(ckpts, key=lambda x: float(x.split(".pth.tar")[0].split("_")[-1]), reverse=True)
     elif key == 'epoch':
         ckpts = sorted(ckpts, key=lambda x: int(x.split(".pth.tar")[0].split("_")[-2]), reverse=True)
-        if epoch!=-1:
-            # epoch += 1
-            ckpts = [ckpts[::-1][epoch]]
+        if epoch != -1:
+            ckpts = [ckpt for ckpt in ckpts if f'epoch_{epoch:03d}' in ckpt]
     return os.path.join(dir, ckpts[0])
 
 ################################################################################
@@ -875,7 +877,8 @@ if __name__ == '__main__':
     parser.add_argument("--only_perfect", action='store_true', help='only evaluate result based on perfect stage 1')
     parser.add_argument("--heatmap_type", type=str, default='fusion', choices=['fusion', 'keypoint', 'line'], help='heatmap type')
     parser.add_argument('--kalman', choices=['true', 'false','True','False'], default='true', help='use kalman to extract heatmaps')
-    parser.add_argument('--normal_kalman', type=bool, default=False)
+    parser.add_argument('--normal_kalman', action='store_true', default=False)
+    parser.add_argument('--selected_index', type=int, default=-1)
     parser.add_argument('--calflops', action='store_true', help='calculate flops')
     args = parser.parse_args()
     main(args)
