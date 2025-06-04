@@ -98,7 +98,10 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
         det_eval = ANETdetection(
             val_dataset.json_file,
             val_dataset.split[0],
-            tiou_thresholds=val_db_vars['tiou_thresholds'])
+            tiou_thresholds=val_db_vars['tiou_thresholds'],
+            desired_actions=cfg['dataset']['desired_actions'] if args.desired_actions is None else args.desired_actions,
+            single_action= args.eval_single_cls,
+            )
     else:
         output_file = os.path.join(
             os.path.split(ckpt_file)[0], 'eval_results.pkl')
@@ -257,7 +260,8 @@ def stage1infer_extractFeature(args):
             eval_dataset.json_file,
             eval_dataset.split[0],
             tiou_thresholds=eval_db_vars['tiou_thresholds'],
-            only_focus_on=['AllTime'])
+            only_focus_on=['AllTime'],
+        )
     
     # init
     new_feat_path = args.cache_dir
@@ -393,12 +397,15 @@ def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path,
     cfg['dataset']['feat_folder'] = new_feat_path
     cfg['dataset']['json_file'] = new_json_path
     cfg['val_split'] = ['test']
+    if args.desired_actions is not None:
+        cfg['dataset']['desired_actions'] = args.desired_actions
     pprint(cfg)
     det_eval = ANETdetection(
         eval_dataset.json_file,
         eval_dataset.split[0],
         tiou_thresholds=eval_db_vars['tiou_thresholds'],
-        only_focus_on=cfg['dataset']['desired_actions']
+        only_focus_on=cfg['dataset']['desired_actions'],
+        single_action=args.eval_single_cls,
     )
     # get action id dict from json file
     label_dict = get_label_dict(eval_dataset.json_file, cfg['dataset']['desired_actions'])
@@ -435,6 +442,12 @@ def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path,
     # evaluate
     mAP = det_eval.evaluate(results) # should be evaluated on the original video rather than the clipped video
     print(f"mAP: {mAP[0] * 100}")
+    if args.eval_single_cls:
+        activity_index = mAP[-1]
+        ap = mAP[-2]
+        for action, i in activity_index.items():
+            mean_ap = ap[:, i].mean()
+            print(f"Action: {action}, AP: {ap[:, i] * 100:.2f}, Mean AP: {mean_ap * 100:.2f}")
 
 def single_cls_map(args, cfg, label_dict, action):
     action_id = label_dict[action]
@@ -831,7 +844,7 @@ if __name__ == '__main__':
                         help='path to a checkpoint')
     parser.add_argument('--epoch',
                         type=int,
-                        default=-1,
+                        default=None,
                         help='checkpoint epoch')
     parser.add_argument('-t',
                         '--topk',
@@ -880,6 +893,8 @@ if __name__ == '__main__':
     parser.add_argument('--normal_kalman', action='store_true', default=False)
     parser.add_argument('--selected_index', type=int, default=-1)
     parser.add_argument('--calflops', action='store_true', help='calculate flops')
+    parser.add_argument('--desired_actions', nargs='+', default=None)
+    parser.add_argument('--eval_single_cls', action='store_true', help='evaluate single class action')
     args = parser.parse_args()
     main(args)
     # flow pretrained for heatmap: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_tal/log/lr0_05_bs8_i3d_flow_bce_224_rot30_prob0_8/best_ckpt.pt

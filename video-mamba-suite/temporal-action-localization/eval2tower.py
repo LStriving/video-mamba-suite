@@ -171,13 +171,16 @@ def twotower_stage2eval(args, eval_dataset, eval_db_vars, new_feat_path, new_fea
     cfg2['dataset']['json_file'] = new_json_path
     cfg['val_split'] = ['test']
     cfg2['val_split'] = ['test']
+    if args.desired_actions is not None:
+        cfg['dataset']['desired_actions'] = args.desired_actions
     pprint(cfg)
     pprint(cfg2)
     det_eval = ANETdetection(
             eval_dataset.json_file,
             eval_dataset.split[0],
             tiou_thresholds=eval_db_vars['tiou_thresholds'],
-            only_focus_on=cfg['dataset']['desired_actions']
+            only_focus_on=cfg['dataset']['desired_actions'],
+            single_action=args.eval_single_cls,
         )
         # get action id dict from json file
     label_dict = get_label_dict(eval_dataset.json_file, cfg['dataset']['desired_actions'])
@@ -214,8 +217,15 @@ def twotower_stage2eval(args, eval_dataset, eval_db_vars, new_feat_path, new_fea
         # evaluate
     mAP = det_eval.evaluate(results) # should be evaluated on the original video rather than the clipped video
     print(f"mAP: {mAP[0] * 100}")
+    if args.eval_single_cls:
+        activity_index = mAP[-1]
+        ap = mAP[-2]
+        for action, i in activity_index.items():
+            mean_ap = ap[:, i].mean()
+            print(f"Action: {action}, AP: {ap[:, i]}, Mean AP: {mean_ap}")
     if args.result_path:
         dump_result_path = os.path.join(args.result_path, 'final_result.pkl')
+        os.makedirs(args.result_path, exist_ok=True)
         with open(dump_result_path, 'wb') as f:
             pickle.dump(results, f)
 
@@ -236,7 +246,7 @@ def get_args():
                         help='path to a checkpoint')
     parser.add_argument('--epoch',
                         type=int,
-                        default=-1,
+                        default=None,
                         help='checkpoint epoch')
     parser.add_argument('-t',
                         '--topk',
@@ -285,6 +295,8 @@ def get_args():
     parser.add_argument('--selected_index', type=int, default=-1, help='selected index for heatmap feature')
     parser.add_argument('--calflops', action='store_true', help='calculate flops')
     parser.add_argument('--vw', type=float, default=None)
+    parser.add_argument('--desired_actions', nargs='+', default=None)
+    parser.add_argument('--eval_single_cls', action='store_true', help='evaluate single class action')
     args = parser.parse_args()
     return args
 
