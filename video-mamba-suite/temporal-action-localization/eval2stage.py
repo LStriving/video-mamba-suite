@@ -99,7 +99,7 @@ def run(cfg, args, action_label=None, infer_or_eval=infer_one_epoch, eval_label_
             val_dataset.json_file,
             val_dataset.split[0],
             tiou_thresholds=val_db_vars['tiou_thresholds'],
-            desired_actions=cfg['dataset']['desired_actions'] if args.desired_actions is None else args.desired_actions,
+            only_focus_on=cfg['dataset']['desired_actions'] if args.desired_actions is None else args.desired_actions,
             single_action= args.eval_single_cls,
             )
     else:
@@ -447,7 +447,7 @@ def stage2eval(args, eval_dataset, eval_db_vars, new_feat_center, new_feat_path,
         ap = mAP[-2]
         for action, i in activity_index.items():
             mean_ap = ap[:, i].mean()
-            print(f"Action: {action}, AP: {ap[:, i] * 100:.2f}, Mean AP: {mean_ap * 100:.2f}")
+            print(f"Action: {action}, AP: {ap[:, i]}, Mean AP: {mean_ap}")
 
 def single_cls_map(args, cfg, label_dict, action):
     action_id = label_dict[action]
