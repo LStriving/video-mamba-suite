@@ -319,6 +319,8 @@ class VideoKeypointProcessor:
         self.confidences = confidences
 
         h, w, _ = self.original_frames[0].shape
+        if isinstance(kalman, str):
+            kalman = eval(kalman)
         if kalman and len(self.keypoints)>1 and not normal_kalman:
             smoothed_keypoints = kalman_filter_with_confidence(self.keypoints, self.confidences)
             reversed_confidences = self.confidences[::-1,:]
@@ -1905,8 +1907,8 @@ if __name__ == "__main__":
     parser.add_argument('--input_root', type=str, default='/mnt/cephfs/ec/home/chenzhuokun/git/swallowProject/2stages/datas/')
     parser.add_argument('--input_file', type=str, default='/mnt/cephfs/home/liyirui/project/swallow_a2net_vswg/stage2-trainval.txt')
     parser.add_argument('--output_root', type=str, default='/mnt/cephfs/dataset/swallow_heatmap56_sigma4_normalkalman')
-    parser.add_argument('--kalman', type=bool, default=True)
-    parser.add_argument('--normal_kalman', type=bool, default=True)
+    parser.add_argument('--kalman', type=str, default='True')
+    parser.add_argument('--normal_kalman', action='store_true')
     parser.add_argument('--selected_index', type=int, default=-1)
     parser.add_argument('--output_size', type=tuple, default=(56,56))
     parser.add_argument('--sigma', type=float, default=4)

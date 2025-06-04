@@ -129,6 +129,7 @@ class ANETdetection(object):
         num_workers=8,
         dataset_name=None,
         only_focus_on=None,
+        single_action=False,
     ):
 
         self.tiou_thresholds = tiou_thresholds
@@ -147,6 +148,7 @@ class ANETdetection(object):
         # remove labels that does not exists in gt
         self.activity_index = {j: i for i, j in enumerate(sorted(self.ground_truth['label'].unique()))}
         self.ground_truth['label']=self.ground_truth['label'].replace(self.activity_index)
+        self.action_details = single_action
 
     def _get_predictions_with_label(self, prediction_by_label, label_name, cidx):
         """Get all predicitons of the given label. Return empty DataFrame if there
@@ -226,6 +228,8 @@ class ANETdetection(object):
             print('Avearge mAP: {:.2f} (%)'.format(average_mAP*100))
 
         # return the results
+        if self.action_details:
+            return mAP, average_mAP, self.ap, self.activity_index
         return mAP, average_mAP
 
 
