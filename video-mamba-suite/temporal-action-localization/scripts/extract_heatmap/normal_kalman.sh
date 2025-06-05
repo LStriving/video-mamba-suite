@@ -1,1 +1,1 @@
-python libs/utils/inference_keypoints_api.py
+python libs/utils/inference_keypoints_api.py --normal_kalman

@@ -14,5 +14,4 @@ CUBLAS_WORKSPACE_CONFIG=:4096:8 nohup python eval2stage.py \
     --cache_dir tmp/raw_heatmap_sigma4_p0.23_vitpose \
     --heatmap \
     --re-extract \
-    --kalman True \
-    --normal_kalman False > ${output_log}
+    --kalman True > ${output_log}

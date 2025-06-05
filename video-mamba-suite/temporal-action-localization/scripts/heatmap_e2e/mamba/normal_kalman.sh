@@ -15,4 +15,4 @@ CUBLAS_WORKSPACE_CONFIG=:4096:8 nohup python eval2stage.py \
     --heatmap \
     --re-extract \
     --kalman True \
-    --normal_kalman True > ${output_log}
+    --normal_kalman > ${output_log}
