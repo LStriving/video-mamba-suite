@@ -146,6 +146,7 @@ DEFAULTS = {
         "vws": None,
         "init_value": 1e-1,
         "ca_type": 'ca',
+        "channel_agg": False,
     },
     "image_stem":{
 

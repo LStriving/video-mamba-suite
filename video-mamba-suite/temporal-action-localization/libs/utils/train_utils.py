@@ -460,7 +460,8 @@ def infer_one_epoch(
                     model=model,
                     args=video_list,
                     output_as_string=True,
-                    output_precision=4
+                    output_precision=4,
+                    forward_mode='as-is',
                 )
                 print("FLOPs:%s   MACs:%s   Params:%s \n" %(flops, macs, params))
                 
