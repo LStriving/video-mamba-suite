@@ -19,7 +19,7 @@ dataset: {
   max_seq_len: 192,
   two_stage: True,
   stage_at: 2,
-  desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
+  desired_actions: [SoftPalateLift],
 }
 model: {
   backbone_type: mamba,
@@ -71,6 +71,10 @@ two_tower: {
   num_layers: 3,
   act_checkpoint: False,
   init_value: 0.1,
-  channel_agg: False,
+  channel_agg: True,
 }
-output_folder: ./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap/
+keypoint: {
+  sigma: 4,
+  model_path: /mnt/cephfs/home/zhoukai/Codes/vfss/vfss_keypoint/models/pytorch/vitpose_trace.pt,
+}
+output_folder: ./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap_channelagg_vitpose/

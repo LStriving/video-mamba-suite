@@ -22,27 +22,25 @@ dataset: {
   desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
 }
 model: {
-  backbone_type: mamba,
+  backbone_type: convTransformer,
   backbone_arch: [2, 2, 4],
-  max_buffer_len_factor: 1.0,
-  # 192 - 96 - 48 - 24 - 12 - 6
-  n_mha_win_size: [25, 25, 25, 25, -1],
   regression_range: [
     [0, 4], [4, 8], [8, 16], [16, 32], [32, 10000]
   ],
-  scale_factor: 2,
+  # scale_factor: 2,
   fpn_type: identity,
+  max_buffer_len_factor: 6.0,
+  n_mha_win_size: [25, 25, 25, 25, -1],
 }
 opt: {
   learning_rate: 0.0001,
-  epochs: 30,
+  epochs: 10,
   weight_decay: 0.05,
   warmup: True,
   warmup_epochs: 5,
 }
 loader: {
   batch_size: 16,
-  accum_steps: 4,
 }
 train_cfg: {
   init_loss_norm: 100,
@@ -66,11 +64,4 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-two_tower: {
-  vw: 0.7,
-  num_layers: 3,
-  act_checkpoint: False,
-  init_value: 0.1,
-  channel_agg: False,
-}
-output_folder: ./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap/
+output_folder: ./ckpts/link2/actionformer_ckpt_swallow_stage_max192_win25/

@@ -1,13 +1,15 @@
-dataset_name: swallow
+dataset_name: heatmap_rawdata
 train_split: ['train']
 val_split: ['validation']
+model_name: E2Eformer
 dataset: {
   json_file: ./data/swallow/anno/swallow_stage2_trainval.json,
-  feat_folder: ./data/swallow/stage_2/rgb_flow_no_interplote/no_interplote,
+  # feat_folder: ./data/swallow/stage_2/resnet50_keypointfeat_56,
+  feat_folder: data/swallow/stage_2/raw_heatmap_sigma4,
   file_prefix: ~,
   file_ext: .npy,
   num_classes: 1,
-  input_dim: 2048,
+  input_dim: 576,
   feature_type: "",
   # feature_type: "_spatial_feature",
   #2048+768, 1024+768,1280+1024
@@ -20,29 +22,32 @@ dataset: {
   two_stage: True,
   stage_at: 2,
   desired_actions: [OralDelivery, SoftPalateLift, HyoidExercise, UESOpen, ThroatSwallow, ThroatTransport, LaryngealVestibuleClosure],
+  resize_to: 56,
 }
 model: {
-  backbone_type: mamba,
+  backbone_type: convTransformer,
   backbone_arch: [2, 2, 4],
-  max_buffer_len_factor: 1.0,
-  # 192 - 96 - 48 - 24 - 12 - 6
-  n_mha_win_size: [25, 25, 25, 25, -1],
   regression_range: [
     [0, 4], [4, 8], [8, 16], [16, 32], [32, 10000]
   ],
-  scale_factor: 2,
+  # scale_factor: 2,
   fpn_type: identity,
+  max_buffer_len_factor: 6.0,
+  n_mha_win_size: 7,
+  image_stem: none,
+  video_stem: video_mamba,
+  frozen_image_embed: False,
 }
 opt: {
   learning_rate: 0.0001,
-  epochs: 30,
+  epochs: 45,
   weight_decay: 0.05,
   warmup: True,
   warmup_epochs: 5,
 }
 loader: {
   batch_size: 16,
-  accum_steps: 4,
+  accum_steps: 2,
 }
 train_cfg: {
   init_loss_norm: 100,
@@ -66,11 +71,18 @@ test_cfg: {
   # comment out L47-48 and uncomment L50 to disable score fusion
   multiclass_nms: True,
 }
-two_tower: {
-  vw: 0.7,
+video_stem: {
+  image_size: 56,
+  in_channels: 1,
+  num_frames: 8,
+  patch_size: 7,
+  embed_dim: 576,
+  drop_path_rate: 0.1,
   num_layers: 3,
-  act_checkpoint: False,
-  init_value: 0.1,
-  channel_agg: False,
+  feature_output_method: avg,
+  act_checkpoint: True,
 }
-output_folder: ./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap/
+keypoint: {
+  sigma: 4,
+}
+output_folder: ./ckpts/link2/e2e_heatmap_stage2_video_mamba_l3_ep45_sigma4_hid576_actionformer/

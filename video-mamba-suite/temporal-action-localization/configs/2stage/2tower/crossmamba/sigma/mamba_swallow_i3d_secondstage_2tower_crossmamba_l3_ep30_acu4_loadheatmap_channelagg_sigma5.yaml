@@ -71,6 +71,9 @@ two_tower: {
   num_layers: 3,
   act_checkpoint: False,
   init_value: 0.1,
-  channel_agg: False,
+  channel_agg: True,
 }
-output_folder: ./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap/
+keypoint: {
+  sigma: 5,
+}
+output_folder: ./ckpts/link2/2tower_crossmamba_3layer_ep30_vw0.7_heatmap_channelagg_sigma5/
