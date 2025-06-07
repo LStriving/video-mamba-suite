@@ -24,3 +24,4 @@ data/
 analysis/*.png
 analysis/*/*.png
 cache
+*.tex
