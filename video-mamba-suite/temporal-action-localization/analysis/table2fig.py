@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
+import matplotlib as mpl
+import matplotlib.font_manager
+mpl.use('Agg')
 
 # Set plotting style
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -8,6 +11,7 @@ plt.style.use('seaborn-v0_8-whitegrid')
 # Configure plotting parameters with reduced heights
 plt.rcParams.update({
     'font.family': 'serif',
+    'font.serif': 'Times',
     'font.size': 20,  # Slightly smaller font
     'axes.labelsize': 20,
     'xtick.labelsize': 20,
@@ -28,7 +32,9 @@ plt.rcParams.update({
 LINE_COLOR = '#1f77b4'  # Dark blue color for lines  
 HIGHLIGHT_COLOR = '#d62728'
 BASELINE_COLOR = '#7f7f7f'  # Gray color for baseline
-LABEL_COLOR = '#666666'  # New color for labels
+# LABEL_COLOR = '#666666'  # New color for labels
+LABEL_COLOR = 'black'  # Black color for labels
+
 
 # size
 marker_size=4
@@ -103,12 +109,12 @@ def create_omega_plot():
                    linewidth=1.2, alpha=0.7, zorder=2)
     
     
-    ax.text(1.05, baseline_branches[0], f'Skeleton Branch',
-                fontsize=12, color=BASELINE_COLOR, va='bottom', ha='right', zorder=2) 
+    ax.text(1.03, baseline_branches[0], f'Skeleton Branch',
+                fontsize=value_fontsize, color=LABEL_COLOR, va='bottom', ha='right', zorder=2) 
     # ax.text(0.20, baseline_branches[0], f'Skeleton Branch',
     #             fontsize=12, color=BASELINE_COLOR, va='top', ha='right', zorder=2) 
-    ax.text(1.05, baseline_branches[1], f'Appearance Branch',
-                fontsize=12, color=BASELINE_COLOR, va='top', ha='right', zorder=2) 
+    ax.text(1.03, baseline_branches[1], f'Appearance Branch',
+                fontsize=value_fontsize, color=LABEL_COLOR, va='top', ha='right', zorder=2) 
 
     # Axis formatting
     # ax.set_xlabel('Fusion Weight ($\omega$)', fontweight='bold')
